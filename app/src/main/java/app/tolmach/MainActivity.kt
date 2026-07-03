@@ -11,6 +11,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +27,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,22 +39,23 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -63,15 +74,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.tolmach.ui.TolmachColors
 import app.tolmach.ui.TolmachTheme
 
 class MainActivity : ComponentActivity() {
@@ -142,16 +156,17 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 18.dp),
         ) {
-            Header(
+            TopBar(onSettings = { showSettings = true })
+            StatusStrip(state = state, onRetryModels = viewModel::retryModelDownload)
+            ConversationList(
                 state = state,
-                onSettings = { showSettings = true },
-                onRetryModels = viewModel::retryModelDownload,
+                onReplay = viewModel::replayMessage,
+                modifier = Modifier.weight(1f),
             )
-            ConversationList(state, modifier = Modifier.weight(1f))
             LiveLine(state)
-            Controls(
+            ControlDeck(
                 state = state,
                 onToggleListen = { withMicPermission(viewModel::toggleListening) },
                 onReply = { withMicPermission(viewModel::startRussianReply) },
@@ -188,87 +203,134 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
     }
 }
 
+// ---------- Шапка ----------
+
 @Composable
-private fun Header(
-    state: UiState,
-    onSettings: () -> Unit,
-    onRetryModels: () -> Unit,
-) {
-    Column(modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Толмач",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    text = "Живой перевод переговоров: китайский — русский",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = onSettings) {
-                Icon(
-                    imageVector = Icons.Filled.Settings,
-                    contentDescription = "Настройки",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatusChip(
-                text = when {
-                    state.modelsReady -> "Модели готовы"
-                    state.modelDownloadFailed -> "Модели: ошибка"
-                    else -> "Загружаю модели…"
-                },
-                ok = state.modelsReady,
+private fun TopBar(onSettings: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(top = 14.dp, bottom = 12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Толмач",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground,
             )
-            StatusChip(
-                text = if (state.headsetConnected) "Наушники: есть" else "Наушники: нет",
-                ok = state.headsetConnected,
-            )
-            StatusChip(
-                text = when (state.chineseLanguageTag) {
-                    "yue-Hant-HK" -> "Кантонский"
-                    "zh-TW" -> "Тайвань"
-                    else -> "Путунхуа"
-                },
-                ok = true,
+            Text(
+                text = "Синхронный перевод переговоров",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (state.modelDownloadFailed) {
-            TextButton(onClick = onRetryModels, contentPadding = PaddingValues(0.dp)) {
-                Text("Повторить загрузку моделей")
-            }
+        IconButton(onClick = onSettings) {
+            Icon(
+                imageVector = Icons.Filled.Settings,
+                contentDescription = "Настройки",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
+// ---------- Приборная строка статусов ----------
+
 @Composable
-private fun StatusChip(text: String, ok: Boolean) {
-    val color = if (ok) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
+private fun StatusStrip(state: UiState, onRetryModels: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(50),
-        color = color.copy(alpha = 0.12f),
-        contentColor = color,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth(),
     ) {
+        Row(
+            modifier = Modifier.height(40.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StatusCell(
+                label = when {
+                    state.modelsReady -> "Перевод: готов"
+                    state.modelDownloadFailed -> "Перевод: ошибка"
+                    else -> "Загрузка…"
+                },
+                dot = when {
+                    state.modelsReady -> TolmachColors.Jade
+                    state.modelDownloadFailed -> TolmachColors.Coral
+                    else -> TolmachColors.TextDim
+                },
+                modifier = Modifier.weight(1f),
+            )
+            StripDivider()
+            StatusCell(
+                label = if (state.headsetConnected) "Наушники: есть" else "Наушники: нет",
+                dot = if (state.headsetConnected) TolmachColors.Jade else TolmachColors.TextDim,
+                modifier = Modifier.weight(1f),
+            )
+            StripDivider()
+            StatusCell(
+                label = when (state.chineseLanguageTag) {
+                    "yue-Hant-HK" -> "Кантонский"
+                    "zh-TW" -> "Тайвань"
+                    else -> "Путунхуа"
+                },
+                dot = TolmachColors.Jade,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+    if (state.modelDownloadFailed) {
+        TextButton(
+            onClick = onRetryModels,
+            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+        ) {
+            Text("Повторить загрузку моделей")
+        }
+    } else {
+        Spacer(Modifier.height(6.dp))
+    }
+}
+
+@Composable
+private fun StatusCell(label: String, dot: Color, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .background(dot, CircleShape),
+        )
+        Spacer(Modifier.width(6.dp))
         Text(
-            text = text,
+            text = label,
             style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
         )
     }
 }
 
 @Composable
-private fun ConversationList(state: UiState, modifier: Modifier = Modifier) {
+private fun StripDivider() {
+    Box(
+        modifier = Modifier
+            .width(1.dp)
+            .fillMaxHeight()
+            .padding(vertical = 10.dp)
+            .background(MaterialTheme.colorScheme.outline),
+    )
+}
+
+// ---------- Лента переговоров ----------
+
+@Composable
+private fun ConversationList(
+    state: UiState,
+    onReplay: (ChatMessage) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val listState = rememberLazyListState()
 
     LaunchedEffect(state.messages.size) {
@@ -278,40 +340,67 @@ private fun ConversationList(state: UiState, modifier: Modifier = Modifier) {
     }
 
     if (state.messages.isEmpty()) {
-        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.GraphicEq,
+                contentDescription = null,
+                tint = TolmachColors.Jade.copy(alpha = 0.55f),
+                modifier = Modifier.size(40.dp),
+            )
+            Spacer(Modifier.height(14.dp))
             Text(
-                text = "Положите телефон ближе к собеседнику и нажмите " +
-                    "«Слушать китайский» — перевод придёт вам в наушники.\n\n" +
-                    "Чтобы ответить, нажмите «Ответить по-русски»: телефон " +
-                    "озвучит вашу фразу по-китайски через динамик.",
+                text = "Телефон — на стол, микрофоном к собеседнику",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Нажмите зелёную кнопку — перевод партнёра придёт вам " +
+                    "в наушники. Кнопка «Ответить» озвучит вашу русскую фразу " +
+                    "по-китайски через динамик.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(horizontal = 26.dp),
             )
         }
     } else {
         LazyColumn(
             state = listState,
             modifier = modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(vertical = 10.dp),
         ) {
             items(state.messages, key = { it.id }) { message ->
-                MessageBubble(message)
+                MessageBubble(message = message, onReplay = { onReplay(message) })
             }
         }
     }
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage, onReplay: () -> Unit) {
     val fromPartner = message.fromChinese
     val alignment = if (fromPartner) Alignment.CenterStart else Alignment.CenterEnd
     val container = if (fromPartner) {
-        MaterialTheme.colorScheme.surfaceVariant
+        MaterialTheme.colorScheme.surface
     } else {
         MaterialTheme.colorScheme.primaryContainer
+    }
+    val borderColor = if (fromPartner) {
+        MaterialTheme.colorScheme.outline
+    } else {
+        TolmachColors.Jade.copy(alpha = 0.35f)
+    }
+    val shape = if (fromPartner) {
+        RoundedCornerShape(topStart = 6.dp, topEnd = 18.dp, bottomEnd = 18.dp, bottomStart = 18.dp)
+    } else {
+        RoundedCornerShape(topStart = 18.dp, topEnd = 6.dp, bottomEnd = 18.dp, bottomStart = 18.dp)
     }
     val primaryText = if (fromPartner) message.translated else message.original
     val secondaryText = if (fromPartner) message.original else message.translated
@@ -321,37 +410,57 @@ private fun MessageBubble(message: ChatMessage) {
 
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = alignment) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = shape,
             color = container,
+            border = BorderStroke(1.dp, borderColor),
             modifier = Modifier
-                .widthIn(max = 320.dp)
+                .widthIn(max = 330.dp)
                 .clickable {
                     clipboard.setText(AnnotatedString(primaryText + "\n" + secondaryText))
                     Toast.makeText(context, "Скопировано", Toast.LENGTH_SHORT).show()
                 },
         ) {
-            Column(Modifier.padding(12.dp)) {
+            Column(Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = (if (fromPartner) "Партнёр" else "Вы").uppercase() +
+                            "  ·  " + message.time,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (fromPartner) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            TolmachColors.Jade
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onReplay, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            imageVector = Icons.Filled.VolumeUp,
+                            contentDescription = "Озвучить ещё раз",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
                 Text(
-                    text = if (fromPartner) {
-                        "Партнёр · ${message.time}"
-                    } else {
-                        "Вы · ${message.time}"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = primaryText,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.padding(end = 6.dp),
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(primaryText, style = MaterialTheme.typography.bodyLarge)
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(5.dp))
                 Text(
                     text = secondaryText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 6.dp),
                 )
             }
         }
     }
 }
+
+// ---------- Живая строка распознавания ----------
 
 @Composable
 private fun LiveLine(state: UiState) {
@@ -368,7 +477,7 @@ private fun LiveLine(state: UiState) {
             color = MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 8.dp),
+                .padding(bottom = 10.dp),
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -377,18 +486,25 @@ private fun LiveLine(state: UiState) {
                 Icon(
                     imageVector = Icons.Filled.GraphicEq,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
+                    tint = TolmachColors.Jade,
+                    modifier = Modifier.size(16.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(text, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                )
             }
         }
     }
 }
 
+// ---------- Пульт управления ----------
+
 @Composable
-private fun Controls(
+private fun ControlDeck(
     state: UiState,
     onToggleListen: () -> Unit,
     onReply: () -> Unit,
@@ -397,77 +513,177 @@ private fun Controls(
     onClear: () -> Unit,
 ) {
     val listening = state.mode == Mode.LISTEN_CHINESE
+    val replying = state.mode == Mode.REPLY_RUSSIAN
+    var menuOpen by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.padding(bottom = 12.dp)) {
-        Button(
-            onClick = onToggleListen,
+    Column(modifier = Modifier.padding(bottom = 14.dp)) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = if (listening) {
-                ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                )
-            } else {
-                ButtonDefaults.buttonColors()
-            },
-        ) {
-            Icon(
-                imageVector = if (listening) Icons.Filled.Stop else Icons.Filled.Mic,
-                contentDescription = null,
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = if (listening) "Остановить" else "Слушать китайский",
-                fontSize = 17.sp,
-            )
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        OutlinedButton(
-            onClick = onReply,
-            enabled = state.mode != Mode.REPLY_RUSSIAN,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("Ответить по-русски")
-        }
-
-        Spacer(Modifier.height(4.dp))
-
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant),
+        )
+        Spacer(Modifier.height(14.dp))
         Row(
-            horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onGlossary) {
-                Text("Словарь")
-            }
-            TextButton(onClick = onShare, enabled = state.messages.isNotEmpty()) {
-                Icon(
-                    imageVector = Icons.Filled.Share,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
+            // Ответить по-русски
+            DeckSideButton(
+                icon = Icons.Filled.Mic,
+                label = "Ответить",
+                active = replying,
+                modifier = Modifier.weight(1f),
+                onClick = onReply,
+            )
+            // Главная кнопка-сфера: слушать китайский
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1.4f),
+            ) {
+                ListenOrb(listening = listening, onClick = onToggleListen)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = if (listening) "Остановить" else "Слушать китайский",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (listening) {
+                        TolmachColors.Coral
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
                 )
-                Spacer(Modifier.width(4.dp))
-                Text("Стенограмма")
             }
-            TextButton(onClick = onClear, enabled = state.messages.isNotEmpty()) {
-                Text("Очистить")
+            // Ещё: словарь, стенограмма, очистить
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                DeckSideButton(
+                    icon = Icons.Filled.MoreHoriz,
+                    label = "Ещё",
+                    active = false,
+                    onClick = { menuOpen = true },
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Словарь терминов") },
+                        onClick = { menuOpen = false; onGlossary() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Отправить стенограмму") },
+                        enabled = state.messages.isNotEmpty(),
+                        onClick = { menuOpen = false; onShare() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Очистить беседу") },
+                        enabled = state.messages.isNotEmpty(),
+                        onClick = { menuOpen = false; onClear() },
+                    )
+                }
             }
         }
     }
 }
+
+@Composable
+private fun ListenOrb(listening: Boolean, onClick: () -> Unit) {
+    val transition = rememberInfiniteTransition(label = "orb")
+    val pulse by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.45f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "pulse",
+    )
+    val ringAlpha = ((1.45f - pulse) / 0.45f) * 0.45f
+
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(104.dp)) {
+        if (listening) {
+            Box(
+                modifier = Modifier
+                    .size(84.dp)
+                    .graphicsLayer {
+                        scaleX = pulse
+                        scaleY = pulse
+                        alpha = ringAlpha
+                    }
+                    .border(2.dp, TolmachColors.Jade, CircleShape),
+            )
+        }
+        val background = if (listening) {
+            Brush.verticalGradient(
+                listOf(TolmachColors.JadeBright, TolmachColors.Jade),
+            )
+        } else {
+            Brush.verticalGradient(
+                listOf(TolmachColors.SurfaceHigh, TolmachColors.Surface),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(84.dp)
+                .clip(CircleShape)
+                .background(background)
+                .border(
+                    width = 1.dp,
+                    color = if (listening) TolmachColors.JadeBright else TolmachColors.Jade.copy(alpha = 0.6f),
+                    shape = CircleShape,
+                )
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (listening) Icons.Filled.Stop else Icons.Filled.Mic,
+                contentDescription = if (listening) "Остановить" else "Слушать китайский",
+                tint = if (listening) TolmachColors.JadeDeep else TolmachColors.Jade,
+                modifier = Modifier.size(34.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DeckSideButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .size(58.dp)
+                .clip(CircleShape)
+                .background(
+                    if (active) TolmachColors.Jade else MaterialTheme.colorScheme.surface,
+                )
+                .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (active) {
+                    TolmachColors.JadeDeep
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+// ---------- Диалоги ----------
 
 @Composable
 private fun GlossaryDialog(
@@ -481,12 +697,13 @@ private fun GlossaryDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("Словарь терминов") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     text = "Замены применяются к готовому переводу — названия " +
-                        "товаров, марки стали, термины поставок. Пример: " +
+                        "товаров, марки, термины поставок. Пример: " +
                         "«инкотермс» → «Incoterms».",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -506,6 +723,7 @@ private fun GlossaryDialog(
                             Icon(
                                 imageVector = Icons.Filled.Delete,
                                 contentDescription = "Удалить",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -559,6 +777,7 @@ private fun SettingsDialog(
     )
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("Язык собеседника") },
         text = {
             Column {

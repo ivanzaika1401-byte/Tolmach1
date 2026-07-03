@@ -1,49 +1,49 @@
 package app.tolmach.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// Нефрит — камень деловых подарков в Китае. Один акцент, всё остальное тихое.
-private val Jade = Color(0xFF3FBF8F)
-private val JadeDeep = Color(0xFF0B2E22)
+// Дизайн-система «Толмач»: единственный акцент — нефрит (камень деловых
+// подарков в Китае), всё остальное — тихий графит. Тема всегда тёмная:
+// одно выверенное состояние вместо двух полупроверенных.
+object TolmachColors {
+    val Jade = Color(0xFF3FBF8F)
+    val JadeBright = Color(0xFF4CD49F)
+    val JadeDeep = Color(0xFF06271B)
+    val Bg = Color(0xFF0C0F12)
+    val Surface = Color(0xFF14181E)
+    val SurfaceHigh = Color(0xFF1A2129)
+    val Hairline = Color(0xFF232B34)
+    val Text = Color(0xFFECEFF3)
+    val TextDim = Color(0xFF8E99A6)
+    val Coral = Color(0xFFE5716A)
+}
 
 private val DarkColors = darkColorScheme(
-    primary = Jade,
-    onPrimary = JadeDeep,
-    primaryContainer = Color(0xFF1D4536),
+    primary = TolmachColors.Jade,
+    onPrimary = TolmachColors.JadeDeep,
+    primaryContainer = Color(0xFF17372B),
     onPrimaryContainer = Color(0xFFC5EDDB),
-    background = Color(0xFF101418),
-    onBackground = Color(0xFFE7EAEE),
-    surface = Color(0xFF151A20),
-    onSurface = Color(0xFFE7EAEE),
-    surfaceVariant = Color(0xFF1E252D),
-    onSurfaceVariant = Color(0xFF9AA5B1),
-    outline = Color(0xFF3A434D),
-    error = Color(0xFFE5716A),
-    errorContainer = Color(0xFF5C2321),
+    background = TolmachColors.Bg,
+    onBackground = TolmachColors.Text,
+    surface = TolmachColors.Surface,
+    onSurface = TolmachColors.Text,
+    surfaceVariant = TolmachColors.SurfaceHigh,
+    onSurfaceVariant = TolmachColors.TextDim,
+    outline = TolmachColors.Hairline,
+    outlineVariant = Color(0xFF1C232B),
+    error = TolmachColors.Coral,
+    errorContainer = Color(0xFF4A1F1D),
     onErrorContainer = Color(0xFFF3C6C2),
-)
-
-private val LightColors = lightColorScheme(
-    primary = Color(0xFF1D7A57),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFCFEBDD),
-    onPrimaryContainer = JadeDeep,
-    background = Color(0xFFFAFAF7),
-    onBackground = Color(0xFF191C1A),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF191C1A),
-    surfaceVariant = Color(0xFFEBEFEA),
-    onSurfaceVariant = Color(0xFF5B655F),
-    outline = Color(0xFFC3CCC5),
 )
 
 @Composable
 fun TolmachTheme(content: @Composable () -> Unit) {
-    val colors = if (isSystemInDarkTheme()) DarkColors else LightColors
-    MaterialTheme(colorScheme = colors, content = content)
+    MaterialTheme(
+        colorScheme = DarkColors,
+        typography = TolmachTypography,
+        content = content,
+    )
 }

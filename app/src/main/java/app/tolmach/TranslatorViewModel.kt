@@ -160,6 +160,22 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Повторная озвучка реплики (кнопка-динамик в пузыре): фразы партнёра —
+     * снова в наушники, ваши фразы — снова по-китайски через динамик.
+     * Прослушивание при этом ставится на паузу и само возобновится.
+     */
+    fun replayMessage(message: ChatMessage) {
+        if (_state.value.mode == Mode.REPLY_RUSSIAN) return
+        speech.stop()
+        voice.stop()
+        if (message.fromChinese) {
+            voice.speakRussian(message.translated)
+        } else {
+            voice.speakChineseAloud(message.translated)
+        }
+    }
+
     /** Повторная попытка скачать офлайн-модели перевода — без перезапуска приложения. */
     fun retryModelDownload() {
         if (_state.value.modelsReady) return

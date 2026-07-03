@@ -65,6 +65,7 @@ class VoiceOutput(
     fun speakRussian(text: String) {
         val engine = tts ?: return
         engine.setLanguage(Locale("ru", "RU"))
+        engine.setSpeechRate(1.0f)
         setSpeaking(true)
         val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, RUSSIAN_UTTERANCE)
         if (result != TextToSpeech.SUCCESS) setSpeaking(false)
@@ -74,6 +75,7 @@ class VoiceOutput(
     fun speakChineseAloud(text: String) {
         val engine = tts ?: return
         engine.setLanguage(Locale.SIMPLIFIED_CHINESE)
+        engine.setSpeechRate(0.95f)
         setSpeaking(true)
         val result =
             engine.synthesizeToFile(text, Bundle(), chineseFile, CHINESE_FILE_UTTERANCE)
