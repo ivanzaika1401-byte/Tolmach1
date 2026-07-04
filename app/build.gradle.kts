@@ -12,8 +12,8 @@ android {
         applicationId = "app.tolmach"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "2.3.0"
+        versionCode = 17
+        versionName = "3.9.0"
     }
 
     buildTypes {
@@ -51,5 +51,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
 
     implementation("com.google.mlkit:translate:17.0.3")
+    implementation("io.getstream:stream-webrtc-android:1.3.9")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    testImplementation("junit:junit:4.13.2")
 }

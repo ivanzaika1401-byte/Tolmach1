@@ -25,6 +25,7 @@ object AudioRoutes {
 private const val RU_DIRECT = "tolmach-ru-direct"
 private const val RU_FILE = "tolmach-ru-file"
 private const val ZH_FILE = "tolmach-zh-file"
+private const val SHARE_FILE = "tolmach-share-file"
 
 /**
  * Озвучивание переводов с гибкой маршрутизацией на два независимых канала.
@@ -42,6 +43,10 @@ class VoiceOutput(
     private val context: Context,
     private val onSpeakingChanged: (Boolean) -> Unit,
     private val onReady: (russianAvailable: Boolean, chineseAvailable: Boolean) -> Unit,
+    private val onVoicesLoaded: (
+        russian: List<Pair<String, String>>,
+        chinese: List<Pair<String, String>>,
+    ) -> Unit = { _, _ -> },
 ) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -53,6 +58,7 @@ class VoiceOutput(
     private var tts: TextToSpeech? = null
     private var player: MediaPlayer? = null
     private val pendingRoutes = HashMap<String, String>()
+    private var shareCallback: ((Boolean) -> Unit)? = null
 
     @Volatile
     private var speaking = false
@@ -66,17 +72,22 @@ class VoiceOutput(
                     engine.isLanguageAvailable(Locale("ru", "RU")) >= TextToSpeech.LANG_AVAILABLE
                 val chineseOk =
                     engine.isLanguageAvailable(Locale.SIMPLIFIED_CHINESE) >= TextToSpeech.LANG_AVAILABLE
-                mainHandler.post { onReady(russianOk, chineseOk) }
+                val russianVoices = voicesFor(engine, Locale("ru", "RU"))
+                val chineseVoices = voicesFor(engine, Locale.SIMPLIFIED_CHINESE)
+                mainHandler.post {
+                    onReady(russianOk, chineseOk)
+                    onVoicesLoaded(russianVoices, chineseVoices)
+                }
             } else {
                 mainHandler.post { onReady(false, false) }
             }
         }
     }
 
-    /** Русский перевод — по выбранному маршруту (по умолчанию системный). */
-    fun speakRussian(text: String, route: String) {
+    /** Русский перевод — по выбранному маршруту и выбранным голосом. */
+    fun speakRussian(text: String, route: String, voiceName: String) {
         val engine = tts ?: return
-        engine.setLanguage(Locale("ru", "RU"))
+        applyVoice(engine, Locale("ru", "RU"), voiceName)
         engine.setSpeechRate(1.0f)
         if (route == AudioRoutes.SYSTEM) {
             setSpeaking(true)
@@ -87,12 +98,38 @@ class VoiceOutput(
         }
     }
 
-    /** Китайский перевод — по выбранному маршруту (по умолчанию динамик). */
-    fun speakChineseAloud(text: String, route: String) {
+    /** Китайский перевод — маршрут, скорость и голос настраиваются. */
+    fun speakChineseAloud(text: String, route: String, rate: Float, voiceName: String) {
         val engine = tts ?: return
-        engine.setLanguage(Locale.SIMPLIFIED_CHINESE)
-        engine.setSpeechRate(0.95f)
+        applyVoice(engine, Locale.SIMPLIFIED_CHINESE, voiceName)
+        engine.setSpeechRate(rate)
         speakViaFile(engine, text, route, chineseFile, ZH_FILE)
+    }
+
+    /**
+     * Тихий синтез китайской фразы в файл — для отправки голосовым
+     * сообщением в WeChat, Telegram или WhatsApp. Ничего не проигрывает.
+     */
+    fun synthesizeChineseFile(
+        text: String,
+        rate: Float,
+        voiceName: String,
+        outFile: File,
+        onDone: (Boolean) -> Unit,
+    ) {
+        val engine = tts
+        if (engine == null) {
+            onDone(false)
+            return
+        }
+        applyVoice(engine, Locale.SIMPLIFIED_CHINESE, voiceName)
+        engine.setSpeechRate(rate)
+        shareCallback = onDone
+        val result = engine.synthesizeToFile(text, Bundle(), outFile, SHARE_FILE)
+        if (result != TextToSpeech.SUCCESS) {
+            shareCallback = null
+            onDone(false)
+        }
     }
 
     /** Прерывает любое текущее озвучивание. */
@@ -107,6 +144,41 @@ class VoiceOutput(
         stop()
         tts?.shutdown()
         tts = null
+    }
+
+    /** Устанавливает выбранный голос; при его отсутствии — язык по умолчанию. */
+    private fun applyVoice(
+        engine: TextToSpeech,
+        locale: Locale,
+        voiceName: String,
+    ) {
+        val voice = if (voiceName.isBlank()) {
+            null
+        } else {
+            runCatching { engine.voices }.getOrNull()
+                ?.firstOrNull { it.name == voiceName }
+        }
+        if (voice != null) {
+            engine.voice = voice
+        } else {
+            engine.setLanguage(locale)
+        }
+    }
+
+    /** До шести голосов языка: локальные первыми, с человеческими подписями. */
+    private fun voicesFor(
+        engine: TextToSpeech,
+        locale: Locale,
+    ): List<Pair<String, String>> {
+        val all = runCatching { engine.voices }.getOrNull() ?: return emptyList()
+        return all
+            .filter { it.locale.language == locale.language }
+            .sortedWith(compareBy({ it.isNetworkConnectionRequired }, { it.name }))
+            .take(6)
+            .mapIndexed { index, voice ->
+                val kind = if (voice.isNetworkConnectionRequired) "сеть" else "офлайн"
+                voice.name to "Голос ${index + 1} · $kind"
+            }
     }
 
     private fun speakViaFile(
@@ -140,11 +212,22 @@ class VoiceOutput(
                 ZH_FILE -> mainHandler.post {
                     playFile(chineseFile, pendingRoutes.remove(ZH_FILE) ?: AudioRoutes.SPEAKER)
                 }
+                SHARE_FILE -> mainHandler.post {
+                    shareCallback?.invoke(true)
+                    shareCallback = null
+                }
             }
         }
 
         @Deprecated("Deprecated in Java")
         override fun onError(utteranceId: String?) {
+            if (utteranceId == SHARE_FILE) {
+                mainHandler.post {
+                    shareCallback?.invoke(false)
+                    shareCallback = null
+                }
+                return
+            }
             if (utteranceId != null) pendingRoutes.remove(utteranceId)
             setSpeaking(false)
         }

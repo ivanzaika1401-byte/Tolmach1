@@ -23,6 +23,7 @@ class SpeechEngine(
     private val onFinal: (String) -> Unit,
     private val onError: (String) -> Unit,
     private val onStateChange: (Boolean) -> Unit,
+    private val onRms: (Float) -> Unit = {},
 ) {
 
     private var recognizer: SpeechRecognizer? = null
@@ -132,7 +133,10 @@ class SpeechEngine(
 
         override fun onReadyForSpeech(params: Bundle?) = Unit
         override fun onBeginningOfSpeech() = Unit
-        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onRmsChanged(rmsdB: Float) {
+            // Типичный диапазон рекогнайзера ~ -2..10 дБ — нормируем в 0..1
+            onRms(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
+        }
         override fun onBufferReceived(buffer: ByteArray?) = Unit
         override fun onEndOfSpeech() = Unit
         override fun onEvent(eventType: Int, params: Bundle?) = Unit

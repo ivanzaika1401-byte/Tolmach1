@@ -8,15 +8,25 @@ import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,6 +60,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
@@ -61,9 +72,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -73,6 +88,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,14 +96,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.tolmach.engine.AudioRoutes
+import java.io.File
 import app.tolmach.ui.TolmachColors
 import app.tolmach.ui.TolmachTheme
 
@@ -107,11 +128,14 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     var showGlossary by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showPhrasebook by remember { mutableStateOf(false) }
     var showCompose by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var showPreflight by remember { mutableStateOf(false) }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -142,17 +166,50 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
         }
     }
 
+    // Системная «Назад» в звонке корректно завершает его, а не роняет приложение.
+    BackHandler(enabled = state.callState != "idle") {
+        viewModel.closeCallUi()
+    }
+
+    // Тактильный отклик в момент установления соединения.
+    LaunchedEffect(state.callState) {
+        if (state.callState == "connected") {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+
+    // Готовое китайское аудио — в системный шаринг (WeChat, Telegram, WhatsApp).
+    LaunchedEffect(state.shareAudioPath) {
+        val path = state.shareAudioPath ?: return@LaunchedEffect
+        runCatching {
+            val uri = FileProvider.getUriForFile(
+                context,
+                context.packageName + ".files",
+                File(path),
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "audio/wav"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Отправить голосом"))
+        }
+        viewModel.clearShareAudio()
+    }
+
     // Во время сеанса перевода экран не гаснет.
     val activity = context as? Activity
-    DisposableEffect(state.mode) {
+    DisposableEffect(state.mode, state.callState) {
         val window = activity?.window
-        if (state.mode != Mode.IDLE) {
+        if (state.mode != Mode.IDLE || state.callState != "idle") {
             window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
+
+    Box(modifier = Modifier.fillMaxSize()) {
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -175,6 +232,8 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
                 hasMessages = state.messages.isNotEmpty(),
                 onCompose = { showCompose = true },
                 onAbout = { showAbout = true },
+                onPreflight = { showPreflight = true },
+                onCall = viewModel::openCallMenu,
                 onOpenGlossary = { showGlossary = true },
                 onOpenSettings = { showSettings = true },
                 onShare = {
@@ -186,7 +245,39 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
                         Intent.createChooser(intent, "Отправить стенограмму"),
                     )
                 },
-                onClear = viewModel::clearConversation,
+                onShareFile = {
+                    val path = viewModel.exportTranscriptFile()
+                    if (path != null) {
+                        runCatching {
+                            val uri = FileProvider.getUriForFile(
+                                context,
+                                context.packageName + ".files",
+                                File(path),
+                            )
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(
+                                Intent.createChooser(intent, "Стенограмма файлом"),
+                            )
+                        }
+                    }
+                },
+                onClear = {
+                    viewModel.clearConversation()
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = "Стенограмма очищена",
+                            actionLabel = "Вернуть",
+                            duration = SnackbarDuration.Short,
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            viewModel.undoClear()
+                        }
+                    }
+                },
             )
             StatusStrip(
                 state = state,
@@ -198,14 +289,57 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
             ConversationList(
                 state = state,
                 onReplay = viewModel::replayMessage,
+                onShareText = { message ->
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(
+                            Intent.EXTRA_TEXT,
+                            message.original + "\n" + message.translated,
+                        )
+                    }
+                    context.startActivity(
+                        Intent.createChooser(intent, "Отправить сообщение"),
+                    )
+                },
+                onShareAudio = viewModel::shareMessageAudio,
                 modifier = Modifier.weight(1f),
             )
-            LiveLine(state)
+            LiveLine(state, onStopSpeaking = viewModel::stopSpeaking)
             ControlDeck(
                 state = state,
-                onToggleListen = { withMicPermission(viewModel::toggleListening) },
-                onReply = { withMicPermission(viewModel::startRussianReply) },
+                onToggleListen = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    withMicPermission(viewModel::toggleListening)
+                },
+                onReply = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    withMicPermission(viewModel::startRussianReply)
+                },
                 onPhrasebook = { showPhrasebook = true },
+            )
+        }
+    }
+
+        AnimatedVisibility(
+            visible = state.callState != "idle",
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(150)),
+        ) {
+            CallOverlay(
+                state = state,
+                errorText = state.error,
+                onCreate = { withMicPermission(viewModel::startCallAsCaller) },
+                onBeginJoin = viewModel::beginJoin,
+                onSubmitJoinCode = { code ->
+                    withMicPermission { viewModel.submitJoinCode(code) }
+                },
+                onSubmitAnswerCode = viewModel::submitAnswerCode,
+                onToggleMute = viewModel::toggleCallMute,
+                onToggleSpeaker = viewModel::toggleCallSpeaker,
+                onOpenPhrases = { showPhrasebook = true },
+                onOpenCompose = { showCompose = true },
+                onEnd = viewModel::endCall,
+                onClose = viewModel::closeCallUi,
             )
         }
     }
@@ -229,6 +363,20 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
             onChineseRoute = viewModel::setChineseRoute,
             onTestRussian = viewModel::testRussianVoice,
             onTestChinese = viewModel::testChineseVoice,
+            useDeepL = state.useDeepL,
+            deepLKey = state.deepLKey,
+            onUseDeepL = viewModel::setUseDeepL,
+            onDeepLKey = viewModel::setDeepLKey,
+            chineseRate = state.chineseRate,
+            onChineseRate = viewModel::setChineseRate,
+            confirmReply = state.confirmReply,
+            onConfirmReply = viewModel::setConfirmReply,
+            russianVoice = state.russianVoice,
+            chineseVoice = state.chineseVoice,
+            onRussianVoice = viewModel::setRussianVoice,
+            onChineseVoice = viewModel::setChineseVoice,
+            ruVoices = state.ruVoices,
+            zhVoices = state.zhVoices,
             onDismiss = { showSettings = false },
         )
     }
@@ -237,6 +385,7 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
         PhrasebookDialog(
             customPhrases = state.customPhrases,
             onPick = { phrase ->
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 showPhrasebook = false
                 viewModel.speakPhrase(phrase)
             },
@@ -260,6 +409,38 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
     if (showAbout) {
         AboutDialog(onDismiss = { showAbout = false })
     }
+
+    val pendingReply = state.pendingReply
+    if (pendingReply != null) {
+        ReplyConfirmDialog(
+            initial = pendingReply,
+            onConfirm = viewModel::confirmReply,
+            onCancel = viewModel::cancelReply,
+        )
+    }
+
+    if (showPreflight) {
+        val micGranted = remember(showPreflight) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        val volumePercent = remember(showPreflight) { viewModel.mediaVolumePercent() }
+        PreflightDialog(
+            state = state,
+            micGranted = micGranted,
+            volumePercent = volumePercent,
+            onTestRussian = viewModel::testRussianVoice,
+            onTestChinese = viewModel::testChineseVoice,
+            onOpenTtsSettings = {
+                runCatching {
+                    context.startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+                }
+            },
+            onDismiss = { showPreflight = false },
+        )
+    }
 }
 
 // ---------- Шапка с брендом и меню ----------
@@ -269,9 +450,12 @@ private fun TopBar(
     hasMessages: Boolean,
     onCompose: () -> Unit,
     onAbout: () -> Unit,
+    onPreflight: () -> Unit,
+    onCall: () -> Unit,
     onOpenGlossary: () -> Unit,
     onOpenSettings: () -> Unit,
     onShare: () -> Unit,
+    onShareFile: () -> Unit,
     onClear: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -319,6 +503,14 @@ private fun TopBar(
                     onClick = { menuOpen = false; onCompose() },
                 )
                 DropdownMenuItem(
+                    text = { Text("Проверка перед встречей") },
+                    onClick = { menuOpen = false; onPreflight() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Защищённый звонок · бета") },
+                    onClick = { menuOpen = false; onCall() },
+                )
+                DropdownMenuItem(
                     text = { Text("Словарь терминов") },
                     onClick = { menuOpen = false; onOpenGlossary() },
                 )
@@ -326,6 +518,11 @@ private fun TopBar(
                     text = { Text("Отправить стенограмму") },
                     enabled = hasMessages,
                     onClick = { menuOpen = false; onShare() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Стенограмма файлом (.txt)") },
+                    enabled = hasMessages,
+                    onClick = { menuOpen = false; onShareFile() },
                 )
                 DropdownMenuItem(
                     text = { Text("Очистить беседу") },
@@ -367,15 +564,18 @@ private fun StatusStrip(
         ) {
             StatusCell(
                 label = when {
+                    state.useDeepL && state.deepLKey.isNotBlank() -> "Перевод: DeepL"
                     state.modelsReady -> "Перевод: готов"
                     state.modelDownloadFailed -> "Перевод: ошибка"
                     else -> "Загрузка…"
                 },
                 dot = when {
+                    state.useDeepL && state.deepLKey.isNotBlank() -> TolmachColors.Gold
                     state.modelsReady -> TolmachColors.Jade
                     state.modelDownloadFailed -> TolmachColors.Coral
                     else -> TolmachColors.TextDim
                 },
+                pulsing = !state.modelsReady && !state.modelDownloadFailed,
                 modifier = Modifier.weight(1f),
             )
             StripDivider()
@@ -405,7 +605,11 @@ private fun StatusStrip(
             )
         }
     }
-    if (state.modelDownloadFailed) {
+    AnimatedVisibility(
+        visible = state.modelDownloadFailed,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
         TextButton(
             onClick = onRetryModels,
             contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
@@ -416,7 +620,24 @@ private fun StatusStrip(
 }
 
 @Composable
-private fun StatusCell(label: String, dot: Color, modifier: Modifier = Modifier) {
+private fun StatusCell(
+    label: String,
+    dot: Color,
+    modifier: Modifier = Modifier,
+    pulsing: Boolean = false,
+) {
+    val dotAlpha = if (pulsing) {
+        val transition = rememberInfiniteTransition(label = "dot")
+        val value by transition.animateFloat(
+            initialValue = 0.25f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+            label = "dotAlpha",
+        )
+        value
+    } else {
+        1f
+    }
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.Center,
@@ -425,7 +646,7 @@ private fun StatusCell(label: String, dot: Color, modifier: Modifier = Modifier)
         Box(
             modifier = Modifier
                 .size(6.dp)
-                .background(dot, CircleShape),
+                .background(dot.copy(alpha = dotAlpha), CircleShape),
         )
         Spacer(Modifier.width(6.dp))
         Text(
@@ -490,6 +711,8 @@ private fun SessionLine(state: UiState) {
 private fun ConversationList(
     state: UiState,
     onReplay: (ChatMessage) -> Unit,
+    onShareText: (ChatMessage) -> Unit,
+    onShareAudio: (ChatMessage) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -539,14 +762,43 @@ private fun ConversationList(
             contentPadding = PaddingValues(vertical = 10.dp),
         ) {
             items(state.messages, key = { it.id }) { message ->
-                MessageBubble(message = message, onReplay = { onReplay(message) })
+                val isNewest = message.id == state.messages.lastOrNull()?.id
+                if (isNewest) {
+                    val appear = remember {
+                        MutableTransitionState(false).apply { targetState = true }
+                    }
+                    AnimatedVisibility(
+                        visibleState = appear,
+                        enter = fadeIn(tween(220)) +
+                            slideInVertically(initialOffsetY = { it / 3 }),
+                    ) {
+                        MessageBubble(
+                            message = message,
+                            onReplay = { onReplay(message) },
+                            onShareText = { onShareText(message) },
+                            onShareAudio = { onShareAudio(message) },
+                        )
+                    }
+                } else {
+                    MessageBubble(
+                            message = message,
+                            onReplay = { onReplay(message) },
+                            onShareText = { onShareText(message) },
+                            onShareAudio = { onShareAudio(message) },
+                        )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, onReplay: () -> Unit) {
+private fun MessageBubble(
+    message: ChatMessage,
+    onReplay: () -> Unit,
+    onShareText: () -> Unit,
+    onShareAudio: () -> Unit,
+) {
     val fromPartner = message.fromChinese
     val alignment = if (fromPartner) Alignment.CenterStart else Alignment.CenterEnd
     val container = if (fromPartner) {
@@ -603,6 +855,35 @@ private fun MessageBubble(message: ChatMessage, onReplay: () -> Unit) {
                             modifier = Modifier.size(16.dp),
                         )
                     }
+                    Box {
+                        var shareMenu by remember { mutableStateOf(false) }
+                        IconButton(
+                            onClick = { shareMenu = true },
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Share,
+                                contentDescription = "Отправить",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(15.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = shareMenu,
+                            onDismissRequest = { shareMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Текстом") },
+                                onClick = { shareMenu = false; onShareText() },
+                            )
+                            if (!fromPartner) {
+                                DropdownMenuItem(
+                                    text = { Text("Голосом · аудио по-китайски") },
+                                    onClick = { shareMenu = false; onShareAudio() },
+                                )
+                            }
+                        }
+                    }
                 }
                 Text(
                     text = primaryText,
@@ -625,7 +906,7 @@ private fun MessageBubble(message: ChatMessage, onReplay: () -> Unit) {
 // ---------- Живая строка распознавания ----------
 
 @Composable
-private fun LiveLine(state: UiState) {
+private fun LiveLine(state: UiState, onStopSpeaking: () -> Unit) {
     val text = when {
         state.speaking -> "Озвучиваю перевод…"
         state.listening && state.partial.isNotBlank() -> state.partial
@@ -633,7 +914,14 @@ private fun LiveLine(state: UiState) {
         state.listening && state.mode == Mode.REPLY_RUSSIAN -> "Говорите по-русски…"
         else -> null
     }
-    if (text != null) {
+    var lastText by remember { mutableStateOf("") }
+    if (text != null) lastText = text
+
+    AnimatedVisibility(
+        visible = text != null,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
         Surface(
             shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -642,23 +930,53 @@ private fun LiveLine(state: UiState) {
                 .padding(bottom = 10.dp),
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.GraphicEq,
-                    contentDescription = null,
-                    tint = TolmachColors.Jade,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(8.dp))
+                EqualizerBars(level = state.micLevel, color = TolmachColors.Jade)
+                Spacer(Modifier.width(9.dp))
                 Text(
-                    text = text,
+                    text = lastText,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 2,
+                    modifier = Modifier.weight(1f),
                 )
+                if (state.speaking) {
+                    IconButton(onClick = onStopSpeaking, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            imageVector = Icons.Filled.Stop,
+                            contentDescription = "Остановить озвучку",
+                            tint = TolmachColors.Coral,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+/** Живой индикатор: полоски дышат от реального уровня микрофона. */
+@Composable
+private fun EqualizerBars(level: Float, color: Color) {
+    val smooth by animateFloatAsState(
+        targetValue = level,
+        animationSpec = tween(90),
+        label = "micLevel",
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.height(18.dp),
+    ) {
+        listOf(0.65f, 1f, 0.8f).forEach { factor ->
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 1.5.dp)
+                    .width(3.dp)
+                    .height((4f + smooth * 14f * factor).dp)
+                    .background(color, RoundedCornerShape(2.dp)),
+            )
         }
     }
 }
@@ -778,12 +1096,14 @@ private fun ListenOrb(listening: Boolean, onClick: () -> Unit) {
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = if (listening) Icons.Filled.Stop else Icons.Filled.Mic,
-                contentDescription = if (listening) "Остановить" else "Слушать китайский",
-                tint = if (listening) TolmachColors.JadeDeep else TolmachColors.Jade,
-                modifier = Modifier.size(34.dp),
-            )
+            Crossfade(targetState = listening, label = "orbIcon") { active ->
+                Icon(
+                    imageVector = if (active) Icons.Filled.Stop else Icons.Filled.Mic,
+                    contentDescription = if (active) "Остановить" else "Слушать китайский",
+                    tint = if (active) TolmachColors.JadeDeep else TolmachColors.Jade,
+                    modifier = Modifier.size(34.dp),
+                )
+            }
         }
     }
 }
@@ -1034,6 +1354,20 @@ private fun SettingsDialog(
     onChineseRoute: (String) -> Unit,
     onTestRussian: () -> Unit,
     onTestChinese: () -> Unit,
+    useDeepL: Boolean,
+    deepLKey: String,
+    onUseDeepL: (Boolean) -> Unit,
+    onDeepLKey: (String) -> Unit,
+    chineseRate: Float,
+    onChineseRate: (Float) -> Unit,
+    confirmReply: Boolean,
+    onConfirmReply: (Boolean) -> Unit,
+    russianVoice: String,
+    chineseVoice: String,
+    onRussianVoice: (String) -> Unit,
+    onChineseVoice: (String) -> Unit,
+    ruVoices: List<Pair<String, String>>,
+    zhVoices: List<Pair<String, String>>,
     onDismiss: () -> Unit,
 ) {
     val languages = listOf(
@@ -1081,6 +1415,15 @@ private fun SettingsDialog(
                     },
                 )
                 PresetRow(
+                    title = "Дистанционный звонок",
+                    subtitle = "Созвон идёт на втором устройстве на громкой связи рядом: " +
+                        "русский — вам, китайский — из динамика в его микрофон.",
+                    onClick = {
+                        onRussianRoute(AudioRoutes.SYSTEM)
+                        onChineseRoute(AudioRoutes.SPEAKER)
+                    },
+                )
+                PresetRow(
                     title = "Наушник у собеседника",
                     subtitle = "Китайский — в Bluetooth собеседнику, русский — из динамика вам.",
                     onClick = {
@@ -1123,6 +1466,115 @@ private fun SettingsDialog(
                     onClick = onTestChinese,
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                 ) { Text("Проверить китайский канал") }
+
+                SectionHeader("Движок перевода")
+                RouteOption(
+                    label = "Офлайн — ML Kit, работает без интернета",
+                    selected = !useDeepL,
+                    onClick = { onUseDeepL(false) },
+                )
+                RouteOption(
+                    label = "DeepL — максимум качества (интернет + ключ)",
+                    selected = useDeepL,
+                    onClick = { onUseDeepL(true) },
+                )
+                if (useDeepL) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = deepLKey,
+                        onValueChange = onDeepLKey,
+                        label = { Text("Ключ DeepL API") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Бесплатный ключ: deepl.com → тариф «DeepL API Free», " +
+                            "500 000 знаков в месяц. Без интернета или при любой " +
+                            "ошибке приложение мгновенно переключится на офлайн-перевод.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                SectionHeader("Скорость китайской озвучки")
+                Text(
+                    text = "%.2f".format(chineseRate) +
+                        "× — медленнее звучит разборчивее для собеседника",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Slider(
+                    value = chineseRate,
+                    onValueChange = onChineseRate,
+                    valueRange = 0.7f..1.2f,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                SectionHeader("Ответ по-русски")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Проверять фразу перед озвучкой",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Text(
+                            text = "покажет распознанный текст — можно поправить " +
+                                "до того, как собеседник услышит перевод",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = confirmReply, onCheckedChange = onConfirmReply)
+                }
+
+                SectionHeader("Голос русской озвучки")
+                if (ruVoices.isEmpty()) {
+                    Text(
+                        text = "Голоса появятся после инициализации синтеза",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    RouteOption(
+                        label = "Системный по умолчанию",
+                        selected = russianVoice.isBlank(),
+                        onClick = { onRussianVoice("") },
+                    )
+                    ruVoices.forEach { (name, label) ->
+                        RouteOption(
+                            label = label,
+                            selected = russianVoice == name,
+                            onClick = { onRussianVoice(name) },
+                        )
+                    }
+                }
+
+                SectionHeader("Голос китайской озвучки")
+                if (zhVoices.isEmpty()) {
+                    Text(
+                        text = "Голоса появятся после инициализации синтеза",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    RouteOption(
+                        label = "Системный по умолчанию",
+                        selected = chineseVoice.isBlank(),
+                        onClick = { onChineseVoice("") },
+                    )
+                    zhVoices.forEach { (name, label) ->
+                        RouteOption(
+                            label = label,
+                            selected = chineseVoice == name,
+                            onClick = { onChineseVoice(name) },
+                        )
+                    }
+                }
 
                 Spacer(Modifier.height(10.dp))
                 Text(
@@ -1287,5 +1739,174 @@ private fun PresetRow(title: String, subtitle: String, onClick: () -> Unit) {
             .fillMaxWidth()
             .height(1.dp)
             .background(MaterialTheme.colorScheme.outlineVariant),
+    )
+}
+
+@Composable
+private fun PreflightDialog(
+    state: UiState,
+    micGranted: Boolean,
+    volumePercent: Int,
+    onTestRussian: () -> Unit,
+    onTestChinese: () -> Unit,
+    onOpenTtsSettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val deepLActive = state.useDeepL && state.deepLKey.isNotBlank()
+    val translationOk = state.modelsReady || deepLActive
+    val headphonesOk = state.bluetoothConnected || state.wiredConnected
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Проверка перед встречей") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                CheckRow(
+                    label = "Микрофон разрешён",
+                    ok = micGranted,
+                    detail = if (micGranted) {
+                        null
+                    } else {
+                        "Android спросит разрешение при первом нажатии записи"
+                    },
+                )
+                CheckRow(
+                    label = "Перевод готов",
+                    ok = translationOk,
+                    detail = when {
+                        deepLActive -> "движок DeepL, офлайн — как страховка"
+                        state.modelsReady -> "офлайн-модели на месте"
+                        else -> "модели ещё не скачаны — нужен интернет"
+                    },
+                )
+                CheckRow(
+                    label = "Русский голос установлен",
+                    ok = state.voiceRussianOk,
+                    detail = if (state.voiceRussianOk) null else "докачайте в настройках синтеза речи",
+                )
+                CheckRow(
+                    label = "Китайский голос установлен",
+                    ok = state.voiceChineseOk,
+                    detail = if (state.voiceChineseOk) null else "докачайте в настройках синтеза речи",
+                )
+                if (!state.voiceRussianOk || !state.voiceChineseOk) {
+                    TextButton(
+                        onClick = onOpenTtsSettings,
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+                    ) { Text("Открыть настройки синтеза") }
+                }
+                CheckRow(
+                    label = "Наушники",
+                    ok = headphonesOk,
+                    detail = when {
+                        state.bluetoothConnected && state.wiredConnected -> "две пары: Bluetooth и провод/USB"
+                        state.bluetoothConnected -> "Bluetooth подключены"
+                        state.wiredConnected -> "проводные/USB подключены"
+                        else -> "нет — русский перевод пойдёт в динамик"
+                    },
+                )
+                CheckRow(
+                    label = "Громкость медиа",
+                    ok = volumePercent >= 25,
+                    detail = "$volumePercent%" +
+                        if (volumePercent < 25) " — прибавьте боковыми кнопками" else "",
+                )
+                Spacer(Modifier.height(6.dp))
+                Row {
+                    TextButton(
+                        onClick = onTestRussian,
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+                    ) { Text("Тест русского") }
+                    Spacer(Modifier.width(10.dp))
+                    TextButton(
+                        onClick = onTestChinese,
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+                    ) { Text("Тест китайского") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Готово") }
+        },
+    )
+}
+
+@Composable
+private fun CheckRow(label: String, ok: Boolean, detail: String? = null) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(
+                    if (ok) TolmachColors.Jade else TolmachColors.Coral,
+                    CircleShape,
+                ),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReplyConfirmDialog(
+    initial: String,
+    onConfirm: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var text by remember(initial) { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Проверьте фразу") },
+        text = {
+            Column {
+                Text(
+                    text = "Так вас услышал телефон. Поправьте при необходимости — " +
+                        "и собеседник получит точный перевод.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = text.isNotBlank(),
+                onClick = { onConfirm(text) },
+            ) { Text("Озвучить по-китайски") }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Отмена") }
+        },
     )
 }

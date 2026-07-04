@@ -11,9 +11,11 @@ import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.tolmach.engine.AudioRoutes
+import app.tolmach.engine.CallEngine
 import app.tolmach.engine.SpeechEngine
 import app.tolmach.engine.TranslationEngine
 import app.tolmach.engine.VoiceOutput
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +24,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -51,8 +54,26 @@ data class UiState(
     val chineseLanguageTag: String = "zh-CN",
     val bluetoothConnected: Boolean = false,
     val wiredConnected: Boolean = false,
+    val voiceRussianOk: Boolean = true,
+    val voiceChineseOk: Boolean = true,
+    val micLevel: Float = 0f,
+    val confirmReply: Boolean = false,
+    val pendingReply: String? = null,
+    val shareAudioPath: String? = null,
+    val callState: String = "idle",
+    val callLocalCode: String = "",
+    val callSeconds: Int = 0,
+    val callMuted: Boolean = false,
+    val callSpeakerOn: Boolean = true,
+    val russianVoice: String = "",
+    val chineseVoice: String = "",
+    val ruVoices: List<Pair<String, String>> = emptyList(),
+    val zhVoices: List<Pair<String, String>> = emptyList(),
     val russianRoute: String = AudioRoutes.SYSTEM,
     val chineseRoute: String = AudioRoutes.SPEAKER,
+    val useDeepL: Boolean = false,
+    val deepLKey: String = "",
+    val chineseRate: Float = 0.95f,
     val glossary: List<GlossaryEntry> = emptyList(),
     val customPhrases: List<Phrase> = emptyList(),
     val error: String? = null,
@@ -72,10 +93,14 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     private var resumeListeningAfterReply = false
     private var recognitionErrorStreak = 0
     private var volumeHintShown = false
+    private var lastClearedMessages: List<ChatMessage> = emptyList()
+    private var lastClearedStart: String? = null
+    private var callEngine: CallEngine? = null
+    private var callTicker: Job? = null
 
     private val translation = TranslationEngine()
 
-    private val speech = SpeechEngine(
+    private val speech: SpeechEngine = SpeechEngine(
         context = app,
         onPartial = { text -> _state.update { it.copy(partial = text) } },
         onFinal = { text -> mainHandler.post { handleFinalResult(text) } },
@@ -83,7 +108,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
             recognitionErrorStreak++
             if (recognitionErrorStreak >= 3) {
                 recognitionErrorStreak = 0
-                speech.stop()
+                hardStopRecognition()
                 _state.update {
                     it.copy(
                         mode = Mode.IDLE,
@@ -96,18 +121,26 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 mainHandler.post { resumeAfterInterruption() }
             }
         },
-        onStateChange = { active -> _state.update { it.copy(listening = active) } },
+        onStateChange = { active ->
+            _state.update {
+                it.copy(listening = active, micLevel = if (active) it.micLevel else 0f)
+            }
+        },
+        onRms = { level -> _state.update { it.copy(micLevel = level) } },
     )
 
-    private val voice = VoiceOutput(
+    private val voice: VoiceOutput = VoiceOutput(
         context = app,
         onSpeakingChanged = { speaking ->
             _state.update { it.copy(speaking = speaking) }
             if (!speaking) resumeAfterSpeech()
         },
         onReady = { russianOk, chineseOk ->
+            _state.update {
+                it.copy(voiceRussianOk = russianOk, voiceChineseOk = chineseOk)
+            }
             if (!russianOk || !chineseOk) {
-                val missing = buildList {
+                val missing = buildList<String> {
                     if (!russianOk) add("русского")
                     if (!chineseOk) add("китайского")
                 }.joinToString(" и ")
@@ -119,6 +152,9 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
+        },
+        onVoicesLoaded = { russian, chinese ->
+            _state.update { it.copy(ruVoices = russian, zhVoices = chinese) }
         },
     )
 
@@ -144,6 +180,12 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                     ?: AudioRoutes.SYSTEM,
                 chineseRoute = prefs.getString("route_zh", AudioRoutes.SPEAKER)
                     ?: AudioRoutes.SPEAKER,
+                useDeepL = prefs.getBoolean("use_deepl", false),
+                deepLKey = prefs.getString("deepl_key", "") ?: "",
+                chineseRate = prefs.getFloat("zh_rate", 0.95f),
+                confirmReply = prefs.getBoolean("confirm_reply", false),
+                russianVoice = prefs.getString("voice_ru", "") ?: "",
+                chineseVoice = prefs.getString("voice_zh", "") ?: "",
             )
         }
         updateHeadsetState()
@@ -207,6 +249,77 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(chineseRoute = route) }
     }
 
+    /** Движок перевода: офлайн ML Kit или DeepL со своим ключом. */
+    fun setUseDeepL(enabled: Boolean) {
+        prefs.edit().putBoolean("use_deepl", enabled).apply()
+        _state.update { it.copy(useDeepL = enabled) }
+    }
+
+    fun setDeepLKey(key: String) {
+        prefs.edit().putString("deepl_key", key).apply()
+        _state.update { it.copy(deepLKey = key) }
+    }
+
+    /** Проверять распознанную русскую фразу перед переводом и озвучкой. */
+    fun setConfirmReply(enabled: Boolean) {
+        prefs.edit().putBoolean("confirm_reply", enabled).apply()
+        _state.update { it.copy(confirmReply = enabled) }
+    }
+
+    fun setRussianVoice(name: String) {
+        prefs.edit().putString("voice_ru", name).apply()
+        _state.update { it.copy(russianVoice = name) }
+    }
+
+    fun setChineseVoice(name: String) {
+        prefs.edit().putString("voice_zh", name).apply()
+        _state.update { it.copy(chineseVoice = name) }
+    }
+
+    /**
+     * Голосовое для мессенджера: синтезирует китайский перевод вашей реплики
+     * в аудиофайл. UI подхватит путь и откроет системный шаринг.
+     */
+    fun shareMessageAudio(message: ChatMessage) {
+        if (message.fromChinese) return
+        val dir = File(getApplication<Application>().cacheDir, "shared").apply { mkdirs() }
+        val out = File(dir, "tolmach_voice_${message.id}.wav")
+        voice.synthesizeChineseFile(
+            text = message.translated,
+            rate = _state.value.chineseRate,
+            voiceName = _state.value.chineseVoice,
+            outFile = out,
+        ) { success ->
+            mainHandler.post {
+                _state.update {
+                    it.copy(
+                        shareAudioPath = if (success) out.absolutePath else null,
+                        error = if (success) {
+                            it.error
+                        } else {
+                            "Не удалось подготовить аудио — проверьте китайский голос."
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearShareAudio() {
+        _state.update { it.copy(shareAudioPath = null) }
+    }
+
+    /** Мгновенно оборвать текущую озвучку; прослушивание возобновится само. */
+    fun stopSpeaking() {
+        voice.stop()
+    }
+
+    /** Скорость китайской озвучки: медленнее — разборчивее для собеседника. */
+    fun setChineseRate(rate: Float) {
+        prefs.edit().putFloat("zh_rate", rate).apply()
+        _state.update { it.copy(chineseRate = rate) }
+    }
+
     /** Проверка русского канала — тестовая фраза по текущему маршруту. */
     fun testRussianVoice() {
         speech.stop()
@@ -214,6 +327,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         voice.speakRussian(
             "Проверка. Русский перевод будет звучать здесь.",
             _state.value.russianRoute,
+            _state.value.russianVoice,
         )
     }
 
@@ -221,7 +335,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     fun testChineseVoice() {
         speech.stop()
         voice.stop()
-        voice.speakChineseAloud("声音测试。中文翻译将从这里播放。", _state.value.chineseRoute)
+        voice.speakChineseAloud("声音测试。中文翻译将从这里播放。", _state.value.chineseRoute, _state.value.chineseRate, _state.value.chineseVoice)
     }
 
     /**
@@ -234,9 +348,13 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         speech.stop()
         voice.stop()
         if (message.fromChinese) {
-            voice.speakRussian(message.translated, _state.value.russianRoute)
+            voice.speakRussian(
+                message.translated,
+                _state.value.russianRoute,
+                _state.value.russianVoice,
+            )
         } else {
-            voice.speakChineseAloud(message.translated, _state.value.chineseRoute)
+            voice.speakChineseAloud(message.translated, _state.value.chineseRoute, _state.value.chineseRate, _state.value.chineseVoice)
         }
     }
 
@@ -246,7 +364,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         speech.stop()
         voice.stop()
         addMessage(original = phrase.russian, translated = phrase.chinese, fromChinese = false)
-        voice.speakChineseAloud(phrase.chinese, _state.value.chineseRoute)
+        voice.speakChineseAloud(phrase.chinese, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
     }
 
     /** Набранная вручную русская фраза: перевести, показать в ленте и озвучить. */
@@ -257,9 +375,14 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         voice.stop()
         viewModelScope.launch {
             try {
-                val translated = applyGlossary(translation.translateRussianToChinese(text))
+                val translated = applyGlossary(translation.translate(
+                        text,
+                        toChinese = true,
+                        useDeepL = _state.value.useDeepL,
+                        deepLKey = _state.value.deepLKey,
+                    ))
                 addMessage(original = text, translated = translated, fromChinese = false)
-                voice.speakChineseAloud(translated, _state.value.chineseRoute)
+                voice.speakChineseAloud(translated, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
             } catch (e: Exception) {
                 _state.update {
                     it.copy(error = "Перевод не удался: ${e.message ?: "проверьте модели"}")
@@ -274,7 +397,12 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         if (text.isEmpty()) return
         viewModelScope.launch {
             try {
-                val translated = applyGlossary(translation.translateRussianToChinese(text))
+                val translated = applyGlossary(translation.translate(
+                        text,
+                        toChinese = true,
+                        useDeepL = _state.value.useDeepL,
+                        deepLKey = _state.value.deepLKey,
+                    ))
                 val updated = _state.value.customPhrases + Phrase("Мои фразы", text, translated)
                 _state.update {
                     it.copy(
@@ -307,7 +435,20 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearConversation() {
+        lastClearedMessages = _state.value.messages
+        lastClearedStart = _state.value.sessionStart
         _state.update { it.copy(messages = emptyList(), sessionStart = null) }
+        persistHistory()
+    }
+
+    /** «Вернуть» из снекбара — восстанавливает случайно очищенную стенограмму. */
+    fun undoClear() {
+        if (lastClearedMessages.isEmpty()) return
+        _state.update {
+            it.copy(messages = lastClearedMessages, sessionStart = lastClearedStart)
+        }
+        lastClearedMessages = emptyList()
+        lastClearedStart = null
         persistHistory()
     }
 
@@ -341,6 +482,18 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
             appendLine()
         }
     }
+
+    /**
+     * Стенограмма файлом .txt — для вложения в письмо и архива сделки.
+     * Возвращает путь в кэше; UI отправит через FileProvider.
+     */
+    fun exportTranscriptFile(): String? = runCatching {
+        val dir = File(getApplication<Application>().cacheDir, "shared").apply { mkdirs() }
+        val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.getDefault()).format(Date())
+        val file = File(dir, "Agroplanet_peregovory_$stamp.txt")
+        file.writeText(transcriptText())
+        file.absolutePath
+    }.getOrNull()
 
     // ---------- Внутренняя логика ----------
 
@@ -383,9 +536,20 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         when (_state.value.mode) {
             Mode.LISTEN_CHINESE -> viewModelScope.launch {
                 try {
-                    val translated = applyGlossary(translation.translateChineseToRussian(text))
+                    val translated = applyGlossary(
+                        translation.translate(
+                            text,
+                            toChinese = false,
+                            useDeepL = _state.value.useDeepL,
+                            deepLKey = _state.value.deepLKey,
+                        ),
+                    )
                     addMessage(original = text, translated = translated, fromChinese = true)
-                    voice.speakRussian(translated, _state.value.russianRoute)
+                    voice.speakRussian(
+                        translated,
+                        _state.value.russianRoute,
+                        _state.value.russianVoice,
+                    )
                 } catch (e: Exception) {
                     _state.update {
                         it.copy(error = "Перевод не удался: ${e.message ?: "проверьте модели"}")
@@ -394,21 +558,51 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
 
-            Mode.REPLY_RUSSIAN -> viewModelScope.launch {
-                try {
-                    val translated = applyGlossary(translation.translateRussianToChinese(text))
-                    addMessage(original = text, translated = translated, fromChinese = false)
-                    voice.speakChineseAloud(translated, _state.value.chineseRoute)
-                } catch (e: Exception) {
-                    _state.update {
-                        it.copy(error = "Перевод не удался: ${e.message ?: "проверьте модели"}")
-                    }
-                    finishReply()
+            Mode.REPLY_RUSSIAN -> {
+                if (_state.value.confirmReply) {
+                    _state.update { it.copy(pendingReply = text) }
+                } else {
+                    translateAndSpeakReply(text)
                 }
             }
 
             Mode.IDLE -> Unit
         }
+    }
+
+    private fun translateAndSpeakReply(text: String) {
+        viewModelScope.launch {
+            try {
+                val translated = applyGlossary(
+                    translation.translate(
+                        text,
+                        toChinese = true,
+                        useDeepL = _state.value.useDeepL,
+                        deepLKey = _state.value.deepLKey,
+                    ),
+                )
+                addMessage(original = text, translated = translated, fromChinese = false)
+                voice.speakChineseAloud(translated, _state.value.chineseRoute, _state.value.chineseRate, _state.value.chineseVoice)
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(error = "Перевод не удался: ${e.message ?: "проверьте модели"}")
+                }
+                finishReply()
+            }
+        }
+    }
+
+    /** Пользователь подтвердил (и, возможно, поправил) распознанную фразу. */
+    fun confirmReply(edited: String) {
+        _state.update { it.copy(pendingReply = null) }
+        val text = edited.trim()
+        if (text.isEmpty()) finishReply() else translateAndSpeakReply(text)
+    }
+
+    /** Пользователь отменил ответ — возвращаемся к прослушиванию. */
+    fun cancelReply() {
+        _state.update { it.copy(pendingReply = null) }
+        finishReply()
     }
 
     /** После окончания озвучки возвращаемся к прослушиванию (полудуплекс). */
@@ -422,6 +616,11 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** После тишины или сбоя распознавания продолжаем текущий режим. */
+    /** Вынесено в метод: прямая ссылка на speech из его же инициализатора запрещена. */
+    private fun hardStopRecognition() {
+        speech.stop()
+    }
+
     private fun resumeAfterInterruption() {
         if (speech.isListening || _state.value.speaking) return
         when (_state.value.mode) {
@@ -550,6 +749,148 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }.getOrDefault(emptyList())
 
+    // ---------- Защищённый P2P-звонок ----------
+
+    fun openCallMenu() {
+        speech.stop()
+        voice.stop()
+        _state.update { it.copy(mode = Mode.IDLE, callState = "menu", callLocalCode = "") }
+    }
+
+    fun startCallAsCaller() {
+        ensureCallEngine().startAsCaller()
+    }
+
+    fun beginJoin() {
+        _state.update { it.copy(callState = "join_input") }
+    }
+
+    fun submitJoinCode(code: String) {
+        ensureCallEngine().startAsJoiner(code)
+    }
+
+    fun submitAnswerCode(code: String) {
+        callEngine?.acceptAnswer(code)
+    }
+
+    /** Динамик или «у уха» — как в обычном звонке. */
+    fun toggleCallSpeaker() {
+        val speakerOn = !_state.value.callSpeakerOn
+        runCatching {
+            audioManager.isSpeakerphoneOn = speakerOn
+        }
+        _state.update { it.copy(callSpeakerOn = speakerOn) }
+    }
+
+    fun toggleCallMute() {
+        val muted = !_state.value.callMuted
+        callEngine?.setMuted(muted)
+        _state.update { it.copy(callMuted = muted) }
+    }
+
+    fun endCall() {
+        callTicker?.cancel()
+        callTicker = null
+        callEngine?.close()
+        callEngine = null
+        restoreAudioAfterCall()
+        _state.update {
+            it.copy(
+                callState = "idle",
+                callLocalCode = "",
+                callSeconds = 0,
+                callMuted = false,
+                callSpeakerOn = true,
+            )
+        }
+    }
+
+    fun closeCallUi() = endCall()
+
+    private fun ensureCallEngine(): CallEngine {
+        val existing = callEngine
+        if (existing != null) return existing
+        val created = CallEngine(
+            context = getApplication(),
+            onState = { newState -> handleCallState(newState) },
+            onLocalCode = { code ->
+                val phase = if (_state.value.callState == "join_input" ||
+                    _state.value.callState == "preparing_answer"
+                ) {
+                    "answer_ready"
+                } else {
+                    "wait_answer"
+                }
+                _state.update { it.copy(callLocalCode = code, callState = phase) }
+            },
+            onError = { message -> _state.update { it.copy(error = message) } },
+        )
+        callEngine = created
+        return created
+    }
+
+    private fun handleCallState(newState: String) {
+        when (newState) {
+            "preparing" -> {
+                val phase = if (_state.value.callState == "join_input") {
+                    "preparing_answer"
+                } else {
+                    "preparing"
+                }
+                _state.update { it.copy(callState = phase) }
+            }
+
+            "connected" -> {
+                if (_state.value.callState != "connected") {
+                    enterCallAudioMode()
+                    startCallTicker()
+                }
+                _state.update { it.copy(callState = "connected") }
+            }
+
+            else -> _state.update { it.copy(callState = newState) }
+        }
+    }
+
+    private fun startCallTicker() {
+        callTicker?.cancel()
+        callTicker = viewModelScope.launch {
+            while (true) {
+                delay(1000)
+                _state.update { it.copy(callSeconds = it.callSeconds + 1) }
+            }
+        }
+    }
+
+    private fun enterCallAudioMode() {
+        runCatching {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = true
+        }
+    }
+
+    private fun restoreAudioAfterCall() {
+        runCatching {
+            audioManager.isSpeakerphoneOn = false
+            audioManager.mode = AudioManager.MODE_NORMAL
+        }
+    }
+
+    /** В активном звонке китайская озвучка всегда идёт в динамик — в канал. */
+    private fun effectiveChineseRoute(): String =
+        if (_state.value.callState == "connected") {
+            AudioRoutes.SPEAKER
+        } else {
+            _state.value.chineseRoute
+        }
+
+    /** Текущая громкость медиа в процентах — для проверки перед встречей. */
+    fun mediaVolumePercent(): Int {
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (max <= 0) return 100
+        return audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+    }
+
     private fun maybeWarnLowVolume() {
         if (volumeHintShown) return
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -582,6 +923,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        endCall()
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         speech.stop()
         voice.shutdown()
