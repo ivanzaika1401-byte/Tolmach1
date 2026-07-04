@@ -19,6 +19,7 @@ object TolmachColors {
     val Text = Color(0xFFECEFF3)
     val TextDim = Color(0xFF8E99A6)
     val Coral = Color(0xFFE5716A)
+    val Gold = Color(0xFFE0B25A)
 }
 
 private val DarkColors = darkColorScheme(
