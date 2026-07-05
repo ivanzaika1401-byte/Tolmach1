@@ -161,7 +161,7 @@ Android Studio → *Open* → синхронизация → *Build → Build AP
 
 ## Если «говорю по-русски — текст показывается, и ничего дальше»
 
-Три причины и лечение (версия 4.5.0 делает все три видимыми и чинит третью):
+Три причины и лечение (версия 4.5.1 делает все три видимыми и чинит третью):
 
 1. **Модели перевода не скачаны.** Вверху должен гореть «Перевод: готов». Пока «Загрузка…» или «ошибка» — переводить нечем: интернет + «Повторить загрузку моделей».
 2. **Нет китайского голоса.** Самопроверка: «Фразы» → «Спасибо за встречу!» — телефон молчит? Настройки Android → Специальные возможности → Синтез речи → докачать китайский (Google). С 3.9.1 приложение говорит об этом прямо.
@@ -169,4 +169,4 @@ Android Studio → *Open* → синхронизация → *Build → Build AP
 
 ## Техническая начинка
 
-Kotlin 2.0, Jetpack Compose (Material 3), MVVM, Golos Text 400/500/600/700. `SpeechRecognizer` (zh-CN / zh-TW / yue-Hant-HK / ru-RU, partial results, удлинённая пауза), ML Kit Translation офлайн, `TextToSpeech` + `MediaPlayer.setPreferredDevice` (независимая маршрутизация каждого канала: система / Bluetooth / провод-USB / динамик). minSdk 26, targetSdk 34, версия 4.5.0.
+Kotlin 2.0, Jetpack Compose (Material 3), MVVM, Golos Text 400/500/600/700. `SpeechRecognizer` (zh-CN / zh-TW / yue-Hant-HK / ru-RU, partial results, удлинённая пауза), ML Kit Translation офлайн, `TextToSpeech` + `MediaPlayer.setPreferredDevice` (независимая маршрутизация каждого канала: система / Bluetooth / провод-USB / динамик). minSdk 26, targetSdk 34, версия 4.5.1.
