@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Этот файл намеренно пуст.
+    Цвет ic_launcher_background объявлен в colors.xml.
+    Раньше здесь была его копия — она вызывала ошибку «Duplicate resources».
+    Файл оставлен пустым, чтобы загрузка через «Upload files» перезаписала
+    старую копию (этот способ не умеет удалять файлы).
+-->
 <resources>
-    <color name="ic_launcher_background">#0C0F12</color>
 </resources>
