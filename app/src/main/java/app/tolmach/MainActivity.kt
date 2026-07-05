@@ -16,9 +16,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -55,13 +55,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -69,6 +72,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -86,6 +92,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -98,22 +105,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import kotlinx.coroutines.launch
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.tolmach.engine.AudioRoutes
-import java.io.File
 import app.tolmach.ui.TolmachColors
 import app.tolmach.ui.TolmachTheme
+import java.io.File
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         setContent {
             TolmachTheme {
@@ -123,16 +132,22 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private const val TAB_TRANSLATOR = 0
+private const val TAB_PHRASES = 1
+private const val TAB_CALL = 2
+private const val TAB_SETTINGS = 3
+
 @Composable
 fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
     val state by viewModel.state.collectAsState()
+    val s = strings(state.appLanguage)
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
+
+    var selectedTab by remember { mutableIntStateOf(TAB_TRANSLATOR) }
     var showGlossary by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var showPhrasebook by remember { mutableStateOf(false) }
     var showCompose by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showPreflight by remember { mutableStateOf(false) }
@@ -166,19 +181,16 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
         }
     }
 
-    // Системная «Назад» в звонке корректно завершает его, а не роняет приложение.
     BackHandler(enabled = state.callState != "idle") {
-        viewModel.closeCallUi()
+        viewModel.endCall()
     }
 
-    // Тактильный отклик в момент установления соединения.
     LaunchedEffect(state.callState) {
         if (state.callState == "connected") {
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         }
     }
 
-    // Готовое китайское аудио — в системный шаринг (WeChat, Telegram, WhatsApp).
     LaunchedEffect(state.shareAudioPath) {
         val path = state.shareAudioPath ?: return@LaunchedEffect
         runCatching {
@@ -192,12 +204,11 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Отправить голосом"))
+            context.startActivity(Intent.createChooser(intent, s.chooserVoice))
         }
         viewModel.clearShareAudio()
     }
 
-    // Во время сеанса перевода экран не гаснет.
     val activity = context as? Activity
     DisposableEffect(state.mode, state.callState) {
         val window = activity?.window
@@ -209,13 +220,27 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
         onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    val entrance = remember {
+        MutableTransitionState(false).apply { targetState = true }
+    }
+    AnimatedVisibility(
+        visibleState = entrance,
+        enter = fadeIn(tween(400)) + slideInVertically(initialOffsetY = { it / 24 }),
+    ) {
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            AppNavBar(
+                s = s,
+                selected = selectedTab,
+                callActive = state.callState == "connected",
+                onSelect = { selectedTab = it },
+            )
+        },
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
@@ -228,124 +253,136 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
                 .padding(padding)
                 .padding(horizontal = 18.dp),
         ) {
-            TopBar(
-                hasMessages = state.messages.isNotEmpty(),
-                onCompose = { showCompose = true },
-                onAbout = { showAbout = true },
-                onPreflight = { showPreflight = true },
-                onCall = viewModel::openCallMenu,
-                onOpenGlossary = { showGlossary = true },
-                onOpenSettings = { showSettings = true },
-                onShare = {
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, viewModel.transcriptText())
-                    }
-                    context.startActivity(
-                        Intent.createChooser(intent, "Отправить стенограмму"),
-                    )
-                },
-                onShareFile = {
-                    val path = viewModel.exportTranscriptFile()
-                    if (path != null) {
-                        runCatching {
-                            val uri = FileProvider.getUriForFile(
-                                context,
-                                context.packageName + ".files",
-                                File(path),
+            Crossfade(targetState = selectedTab, label = "tabs") { tab ->
+                when (tab) {
+                TAB_TRANSLATOR -> TranslatorScreen(
+                    state = state,
+                    s = s,
+                    onToggleListen = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        withMicPermission(viewModel::toggleListening)
+                    },
+                    onReply = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        withMicPermission(viewModel::startRussianReply)
+                    },
+                    onOpenPhrases = { selectedTab = TAB_PHRASES },
+                    onOpenSettings = { selectedTab = TAB_SETTINGS },
+                    onRetryModels = viewModel::retryModelDownload,
+                    onStopSpeaking = viewModel::stopSpeaking,
+                    onReplay = viewModel::replayMessage,
+                    onShareText = { message ->
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(
+                                Intent.EXTRA_TEXT,
+                                message.original + "\n" + message.translated,
                             )
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(
+                            Intent.createChooser(intent, s.chooserMessage),
+                        )
+                    },
+                    onShareAudio = viewModel::shareMessageAudio,
+                    onCompose = { showCompose = true },
+                    onShare = {
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, viewModel.transcriptText())
+                        }
+                        context.startActivity(
+                            Intent.createChooser(intent, s.chooserTranscript),
+                        )
+                    },
+                    onShareFile = {
+                        val path = viewModel.exportTranscriptFile()
+                        if (path != null) {
+                            runCatching {
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    context.packageName + ".files",
+                                    File(path),
+                                )
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(intent, s.chooserTranscriptFile),
+                                )
                             }
-                            context.startActivity(
-                                Intent.createChooser(intent, "Стенограмма файлом"),
+                        }
+                    },
+                    onClear = {
+                        viewModel.clearConversation()
+                        scope.launch {
+                            val result = snackbarHostState.showSnackbar(
+                                message = s.clearedSnack,
+                                actionLabel = s.undoAction,
+                                duration = SnackbarDuration.Short,
                             )
+                            if (result == SnackbarResult.ActionPerformed) {
+                                viewModel.undoClear()
+                            }
                         }
-                    }
-                },
-                onClear = {
-                    viewModel.clearConversation()
-                    scope.launch {
-                        val result = snackbarHostState.showSnackbar(
-                            message = "Стенограмма очищена",
-                            actionLabel = "Вернуть",
-                            duration = SnackbarDuration.Short,
-                        )
-                        if (result == SnackbarResult.ActionPerformed) {
-                            viewModel.undoClear()
+                    },
+                )
+
+                TAB_PHRASES -> PhrasesScreen(
+                    state = state,
+                    onPick = { phrase ->
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.speakPhrase(phrase)
+                        selectedTab = if (state.callState == "connected") {
+                            TAB_CALL
+                        } else {
+                            TAB_TRANSLATOR
                         }
-                    }
-                },
-            )
-            StatusStrip(
-                state = state,
-                onRetryModels = viewModel::retryModelDownload,
-                onOpenSettings = { showSettings = true },
-            )
-            RoutesLine(state = state, onOpenSettings = { showSettings = true })
-            SessionLine(state)
-            ConversationList(
-                state = state,
-                onReplay = viewModel::replayMessage,
-                onShareText = { message ->
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(
-                            Intent.EXTRA_TEXT,
-                            message.original + "\n" + message.translated,
-                        )
-                    }
-                    context.startActivity(
-                        Intent.createChooser(intent, "Отправить сообщение"),
-                    )
-                },
-                onShareAudio = viewModel::shareMessageAudio,
-                modifier = Modifier.weight(1f),
-            )
-            LiveLine(state, onStopSpeaking = viewModel::stopSpeaking)
-            ControlDeck(
-                state = state,
-                onToggleListen = {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    withMicPermission(viewModel::toggleListening)
-                },
-                onReply = {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    withMicPermission(viewModel::startRussianReply)
-                },
-                onPhrasebook = { showPhrasebook = true },
-            )
+                    },
+                    onRemoveCustom = viewModel::removeCustomPhrase,
+                    onAddOwn = { showCompose = true },
+                )
+
+                TAB_CALL -> CallScreen(
+                    state = state,
+                    onCreate = { withMicPermission(viewModel::startCallAsCaller) },
+                    onBeginJoin = viewModel::beginJoin,
+                    onSubmitJoinCode = { code ->
+                        withMicPermission { viewModel.submitJoinCode(code) }
+                    },
+                    onSubmitAnswerCode = viewModel::submitAnswerCode,
+                    onToggleMute = viewModel::toggleCallMute,
+                    onToggleSpeaker = viewModel::toggleCallSpeaker,
+                    onOpenPhrases = { selectedTab = TAB_PHRASES },
+                    onOpenCompose = { showCompose = true },
+                    onEnd = viewModel::endCall,
+                )
+
+                TAB_SETTINGS -> SettingsScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    onOpenGlossary = { showGlossary = true },
+                    onOpenPreflight = { showPreflight = true },
+                    onOpenAbout = { showAbout = true },
+                )
+                }
+            }
         }
     }
+    }
 
-        AnimatedVisibility(
-            visible = state.callState != "idle",
-            enter = fadeIn(tween(180)),
-            exit = fadeOut(tween(150)),
-        ) {
-            CallOverlay(
-                state = state,
-                errorText = state.error,
-                onCreate = { withMicPermission(viewModel::startCallAsCaller) },
-                onBeginJoin = viewModel::beginJoin,
-                onSubmitJoinCode = { code ->
-                    withMicPermission { viewModel.submitJoinCode(code) }
-                },
-                onSubmitAnswerCode = viewModel::submitAnswerCode,
-                onToggleMute = viewModel::toggleCallMute,
-                onToggleSpeaker = viewModel::toggleCallSpeaker,
-                onOpenPhrases = { showPhrasebook = true },
-                onOpenCompose = { showCompose = true },
-                onEnd = viewModel::endCall,
-                onClose = viewModel::closeCallUi,
-            )
-        }
+    if (state.showLanguagePicker) {
+        LanguagePickerDialog(onPick = viewModel::setAppLanguage)
+    }
+
+    if (state.showGuide && !state.showLanguagePicker) {
+        GuideDialog(s = s, onDismiss = viewModel::dismissGuide)
     }
 
     if (showGlossary) {
         GlossaryDialog(
+            s = s,
             entries = state.glossary,
             onAdd = viewModel::addGlossaryEntry,
             onRemove = viewModel::removeGlossaryEntry,
@@ -353,53 +390,9 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
         )
     }
 
-    if (showSettings) {
-        SettingsDialog(
-            currentTag = state.chineseLanguageTag,
-            onSelectTag = viewModel::setChineseLanguage,
-            russianRoute = state.russianRoute,
-            chineseRoute = state.chineseRoute,
-            onRussianRoute = viewModel::setRussianRoute,
-            onChineseRoute = viewModel::setChineseRoute,
-            onTestRussian = viewModel::testRussianVoice,
-            onTestChinese = viewModel::testChineseVoice,
-            useDeepL = state.useDeepL,
-            deepLKey = state.deepLKey,
-            onUseDeepL = viewModel::setUseDeepL,
-            onDeepLKey = viewModel::setDeepLKey,
-            chineseRate = state.chineseRate,
-            onChineseRate = viewModel::setChineseRate,
-            confirmReply = state.confirmReply,
-            onConfirmReply = viewModel::setConfirmReply,
-            russianVoice = state.russianVoice,
-            chineseVoice = state.chineseVoice,
-            onRussianVoice = viewModel::setRussianVoice,
-            onChineseVoice = viewModel::setChineseVoice,
-            ruVoices = state.ruVoices,
-            zhVoices = state.zhVoices,
-            onDismiss = { showSettings = false },
-        )
-    }
-
-    if (showPhrasebook) {
-        PhrasebookDialog(
-            customPhrases = state.customPhrases,
-            onPick = { phrase ->
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                showPhrasebook = false
-                viewModel.speakPhrase(phrase)
-            },
-            onRemoveCustom = viewModel::removeCustomPhrase,
-            onAddOwn = {
-                showPhrasebook = false
-                showCompose = true
-            },
-            onDismiss = { showPhrasebook = false },
-        )
-    }
-
     if (showCompose) {
         ComposeDialog(
+            s = s,
             onSpeak = viewModel::composeAndSpeak,
             onSave = viewModel::addCustomPhrase,
             onDismiss = { showCompose = false },
@@ -407,16 +400,7 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
     }
 
     if (showAbout) {
-        AboutDialog(onDismiss = { showAbout = false })
-    }
-
-    val pendingReply = state.pendingReply
-    if (pendingReply != null) {
-        ReplyConfirmDialog(
-            initial = pendingReply,
-            onConfirm = viewModel::confirmReply,
-            onCancel = viewModel::cancelReply,
-        )
+        AboutDialog(s = s, onDismiss = { showAbout = false })
     }
 
     if (showPreflight) {
@@ -428,6 +412,7 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
         }
         val volumePercent = remember(showPreflight) { viewModel.mediaVolumePercent() }
         PreflightDialog(
+            s = s,
             state = state,
             micGranted = micGranted,
             volumePercent = volumePercent,
@@ -441,19 +426,258 @@ fun TolmachApp(viewModel: TranslatorViewModel = viewModel()) {
             onDismiss = { showPreflight = false },
         )
     }
+
+    val pendingReply = state.pendingReply
+    if (pendingReply != null) {
+        ReplyConfirmDialog(
+            s = s,
+            initial = pendingReply,
+            onConfirm = viewModel::confirmReply,
+            onCancel = viewModel::cancelReply,
+        )
+    }
 }
 
-// ---------- Шапка с брендом и меню ----------
+// ---------- Выбор языка при первом входе ----------
+
+@Composable
+private fun LanguagePickerDialog(onPick: (String) -> Unit) {
+    AlertDialog(
+        onDismissRequest = {},
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Язык интерфейса · 界面语言") },
+        text = {
+            Column {
+                LanguageChoice(
+                    title = RuStrings.languageRu,
+                    subtitle = RuStrings.pickerRuSub,
+                    onClick = { onPick("ru") },
+                )
+                Spacer(Modifier.height(10.dp))
+                LanguageChoice(
+                    title = RuStrings.languageZh,
+                    subtitle = ZhStrings.pickerZhSub,
+                    onClick = { onPick("zh") },
+                )
+            }
+        },
+        confirmButton = {},
+    )
+}
+
+@Composable
+private fun LanguageChoice(title: String, subtitle: String, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = TolmachColors.Jade,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ---------- Гид ----------
+
+@Composable
+private fun GuideDialog(s: AppStrings, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(s.guideTitle) },
+        text = {
+            Column {
+                GuideRow(
+                    icon = Icons.Filled.GraphicEq,
+                    title = s.guideListenTitle,
+                    text = s.guideListenText,
+                )
+                Spacer(Modifier.height(12.dp))
+                GuideRow(
+                    icon = Icons.Filled.Mic,
+                    title = s.guideReplyTitle,
+                    text = s.guideReplyText,
+                )
+                Spacer(Modifier.height(12.dp))
+                GuideRow(
+                    icon = Icons.Filled.Bolt,
+                    title = s.guideMoreTitle,
+                    text = s.guideMoreText,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = s.guideFootnote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(s.gotIt) }
+        },
+    )
+}
+
+@Composable
+private fun GuideRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    text: String,
+) {
+    Row {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = TolmachColors.Jade,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ---------- Нижняя навигация ----------
+
+@Composable
+private fun AppNavBar(
+    s: AppStrings,
+    selected: Int,
+    callActive: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    val items = listOf(
+        Triple(TAB_TRANSLATOR, s.tabTranslator, Icons.Filled.Translate),
+        Triple(TAB_PHRASES, s.tabPhrases, Icons.Filled.Bolt),
+        Triple(TAB_CALL, s.tabCall, Icons.Filled.Call),
+        Triple(TAB_SETTINGS, s.tabSettings, Icons.Filled.Settings),
+    )
+    Column {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant),
+        )
+        NavigationBar(
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
+        ) {
+            items.forEach { (index, label, icon) ->
+                NavigationBarItem(
+                    selected = selected == index,
+                    onClick = { onSelect(index) },
+                    icon = {
+                        val tint = when {
+                            index == TAB_CALL && callActive -> TolmachColors.Gold
+                            else -> null
+                        }
+                        if (tint != null) {
+                            Icon(imageVector = icon, contentDescription = label, tint = tint)
+                        } else {
+                            Icon(imageVector = icon, contentDescription = label)
+                        }
+                    },
+                    label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = TolmachColors.Jade,
+                        selectedTextColor = TolmachColors.Jade,
+                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+// ---------- Вкладка «Перевод» ----------
+
+@Composable
+private fun TranslatorScreen(
+    state: UiState,
+    s: AppStrings,
+    onToggleListen: () -> Unit,
+    onReply: () -> Unit,
+    onOpenPhrases: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onRetryModels: () -> Unit,
+    onStopSpeaking: () -> Unit,
+    onReplay: (ChatMessage) -> Unit,
+    onShareText: (ChatMessage) -> Unit,
+    onShareAudio: (ChatMessage) -> Unit,
+    onCompose: () -> Unit,
+    onShare: () -> Unit,
+    onShareFile: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopBar(
+            s = s,
+            hasMessages = state.messages.isNotEmpty(),
+            onCompose = onCompose,
+            onShare = onShare,
+            onShareFile = onShareFile,
+            onClear = onClear,
+        )
+        StatusStrip(
+            state = state,
+            s = s,
+            onRetryModels = onRetryModels,
+            onOpenSettings = onOpenSettings,
+        )
+        RoutesLine(state = state, s = s, onOpenSettings = onOpenSettings)
+        SessionLine(state = state, s = s)
+        ConversationList(
+            state = state,
+            s = s,
+            onReplay = onReplay,
+            onShareText = onShareText,
+            onShareAudio = onShareAudio,
+            modifier = Modifier.weight(1f),
+        )
+        LiveLine(state = state, s = s, onStopSpeaking = onStopSpeaking)
+        ControlDeck(
+            state = state,
+            s = s,
+            onToggleListen = onToggleListen,
+            onReply = onReply,
+            onPhrasebook = onOpenPhrases,
+        )
+    }
+}
 
 @Composable
 private fun TopBar(
+    s: AppStrings,
     hasMessages: Boolean,
     onCompose: () -> Unit,
-    onAbout: () -> Unit,
-    onPreflight: () -> Unit,
-    onCall: () -> Unit,
-    onOpenGlossary: () -> Unit,
-    onOpenSettings: () -> Unit,
     onShare: () -> Unit,
     onShareFile: () -> Unit,
     onClear: () -> Unit,
@@ -476,7 +700,7 @@ private fun TopBar(
                     color = TolmachColors.Gold,
                 )
                 Text(
-                    text = "  ·  переговоры с Китаем",
+                    text = "  ·  " + s.brandTagline,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -485,7 +709,7 @@ private fun TopBar(
         IconButton(onClick = onCompose) {
             Icon(
                 imageVector = Icons.Filled.Keyboard,
-                contentDescription = "Написать по-русски",
+                contentDescription = s.composeTooltip,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -493,60 +717,41 @@ private fun TopBar(
             IconButton(onClick = { menuOpen = true }) {
                 Icon(
                     imageVector = Icons.Filled.MoreVert,
-                    contentDescription = "Меню",
+                    contentDescription = s.menuTooltip,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
-                    text = { Text("Написать по-русски") },
+                    text = { Text(s.menuCompose) },
                     onClick = { menuOpen = false; onCompose() },
                 )
                 DropdownMenuItem(
-                    text = { Text("Проверка перед встречей") },
-                    onClick = { menuOpen = false; onPreflight() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Защищённый звонок · бета") },
-                    onClick = { menuOpen = false; onCall() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Словарь терминов") },
-                    onClick = { menuOpen = false; onOpenGlossary() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Отправить стенограмму") },
+                    text = { Text(s.menuShareTranscript) },
                     enabled = hasMessages,
                     onClick = { menuOpen = false; onShare() },
                 )
                 DropdownMenuItem(
-                    text = { Text("Стенограмма файлом (.txt)") },
+                    text = { Text(s.menuShareFile) },
                     enabled = hasMessages,
                     onClick = { menuOpen = false; onShareFile() },
                 )
                 DropdownMenuItem(
-                    text = { Text("Очистить беседу") },
+                    text = { Text(s.menuClear) },
                     enabled = hasMessages,
                     onClick = { menuOpen = false; onClear() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Настройки") },
-                    onClick = { menuOpen = false; onOpenSettings() },
-                )
-                DropdownMenuItem(
-                    text = { Text("О приложении") },
-                    onClick = { menuOpen = false; onAbout() },
                 )
             }
         }
     }
 }
 
-// ---------- Приборная строка статусов ----------
+// ---------- Приборная строка ----------
 
 @Composable
 private fun StatusStrip(
     state: UiState,
+    s: AppStrings,
     onRetryModels: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -564,10 +769,10 @@ private fun StatusStrip(
         ) {
             StatusCell(
                 label = when {
-                    state.useDeepL && state.deepLKey.isNotBlank() -> "Перевод: DeepL"
-                    state.modelsReady -> "Перевод: готов"
-                    state.modelDownloadFailed -> "Перевод: ошибка"
-                    else -> "Загрузка…"
+                    state.useDeepL && state.deepLKey.isNotBlank() -> s.translationDeepL
+                    state.modelsReady -> s.translationReady
+                    state.modelDownloadFailed -> s.translationError
+                    else -> s.translationLoading
                 },
                 dot = when {
                     state.useDeepL && state.deepLKey.isNotBlank() -> TolmachColors.Gold
@@ -581,10 +786,10 @@ private fun StatusStrip(
             StripDivider()
             StatusCell(
                 label = when {
-                    state.bluetoothConnected && state.wiredConnected -> "Наушники: 2 пары"
-                    state.bluetoothConnected -> "Наушники: BT"
-                    state.wiredConnected -> "Наушники: провод"
-                    else -> "Наушники: нет"
+                    state.bluetoothConnected && state.wiredConnected -> s.headphonesTwo
+                    state.bluetoothConnected -> s.headphonesBt
+                    state.wiredConnected -> s.headphonesWired
+                    else -> s.headphonesNone
                 },
                 dot = if (state.bluetoothConnected || state.wiredConnected) {
                     TolmachColors.Jade
@@ -596,9 +801,9 @@ private fun StatusStrip(
             StripDivider()
             StatusCell(
                 label = when (state.chineseLanguageTag) {
-                    "yue-Hant-HK" -> "Кантонский"
-                    "zh-TW" -> "Тайвань"
-                    else -> "Путунхуа"
+                    "yue-Hant-HK" -> s.dialectCantonese
+                    "zh-TW" -> s.dialectTaiwan
+                    else -> s.dialectMandarin
                 },
                 dot = TolmachColors.Jade,
                 modifier = Modifier.weight(1f),
@@ -614,7 +819,7 @@ private fun StatusStrip(
             onClick = onRetryModels,
             contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
         ) {
-            Text("Повторить загрузку моделей")
+            Text(s.retryModels)
         }
     }
 }
@@ -669,18 +874,18 @@ private fun StripDivider() {
     )
 }
 
-private fun routeLabel(route: String): String = when (route) {
-    AudioRoutes.BLUETOOTH -> "Bluetooth"
-    AudioRoutes.WIRED -> "провод/USB"
-    AudioRoutes.SPEAKER -> "динамик"
-    else -> "авто"
+private fun routeLabel(s: AppStrings, route: String): String = when (route) {
+    AudioRoutes.BLUETOOTH -> s.routeBluetooth
+    AudioRoutes.WIRED -> s.routeWired
+    AudioRoutes.SPEAKER -> s.routeSpeaker
+    else -> s.routeAuto
 }
 
 @Composable
-private fun RoutesLine(state: UiState, onOpenSettings: () -> Unit) {
+private fun RoutesLine(state: UiState, s: AppStrings, onOpenSettings: () -> Unit) {
     Text(
-        text = "Русский → " + routeLabel(state.russianRoute) +
-            "   ·   Китайский → " + routeLabel(state.chineseRoute),
+        text = s.routeRussianTo + routeLabel(s, state.russianRoute) +
+            "   ·   " + s.routeChineseTo + routeLabel(s, state.chineseRoute),
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
@@ -691,11 +896,11 @@ private fun RoutesLine(state: UiState, onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun SessionLine(state: UiState) {
+private fun SessionLine(state: UiState, s: AppStrings) {
     val start = state.sessionStart
     if (start != null && state.messages.isNotEmpty()) {
         Text(
-            text = "Сеанс с $start · реплик: ${state.messages.size}",
+            text = s.sessionLine(start, state.messages.size),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 2.dp, top = 5.dp),
@@ -710,6 +915,7 @@ private fun SessionLine(state: UiState) {
 @Composable
 private fun ConversationList(
     state: UiState,
+    s: AppStrings,
     onReplay: (ChatMessage) -> Unit,
     onShareText: (ChatMessage) -> Unit,
     onShareAudio: (ChatMessage) -> Unit,
@@ -729,25 +935,29 @@ private fun ConversationList(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
+            val breathe = rememberInfiniteTransition(label = "empty")
+            val emptyAlpha by breathe.animateFloat(
+                initialValue = 0.35f,
+                targetValue = 0.75f,
+                animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
+                label = "emptyAlpha",
+            )
             Icon(
                 imageVector = Icons.Filled.GraphicEq,
                 contentDescription = null,
-                tint = TolmachColors.Jade.copy(alpha = 0.55f),
+                tint = TolmachColors.Jade.copy(alpha = emptyAlpha),
                 modifier = Modifier.size(40.dp),
             )
             Spacer(Modifier.height(14.dp))
             Text(
-                text = "Телефон — на стол, микрофоном к собеседнику",
+                text = s.emptyTitle,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "Зелёная кнопка — перевод партнёра тихо придёт вам " +
-                    "в наушники. «Ответить» — ваша русская фраза прозвучит " +
-                    "по-китайски. «Фразы» — готовые формулировки Agroplanet " +
-                    "в одно касание.",
+                text = s.emptyBody,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -774,6 +984,7 @@ private fun ConversationList(
                     ) {
                         MessageBubble(
                             message = message,
+                            s = s,
                             onReplay = { onReplay(message) },
                             onShareText = { onShareText(message) },
                             onShareAudio = { onShareAudio(message) },
@@ -781,11 +992,12 @@ private fun ConversationList(
                     }
                 } else {
                     MessageBubble(
-                            message = message,
-                            onReplay = { onReplay(message) },
-                            onShareText = { onShareText(message) },
-                            onShareAudio = { onShareAudio(message) },
-                        )
+                        message = message,
+                        s = s,
+                        onReplay = { onReplay(message) },
+                        onShareText = { onShareText(message) },
+                        onShareAudio = { onShareAudio(message) },
+                    )
                 }
             }
         }
@@ -795,6 +1007,7 @@ private fun ConversationList(
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
+    s: AppStrings,
     onReplay: () -> Unit,
     onShareText: () -> Unit,
     onShareAudio: () -> Unit,
@@ -821,6 +1034,7 @@ private fun MessageBubble(
 
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
 
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = alignment) {
         Surface(
@@ -830,14 +1044,15 @@ private fun MessageBubble(
             modifier = Modifier
                 .widthIn(max = 330.dp)
                 .clickable {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     clipboard.setText(AnnotatedString(primaryText + "\n" + secondaryText))
-                    Toast.makeText(context, "Скопировано", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, s.copiedToast, Toast.LENGTH_SHORT).show()
                 },
         ) {
             Column(Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = (if (fromPartner) "Партнёр" else "Вы").uppercase() +
+                        text = (if (fromPartner) s.partnerLabel else s.youLabel).uppercase() +
                             "  ·  " + message.time,
                         style = MaterialTheme.typography.labelSmall,
                         color = if (fromPartner) {
@@ -850,7 +1065,7 @@ private fun MessageBubble(
                     IconButton(onClick = onReplay, modifier = Modifier.size(30.dp)) {
                         Icon(
                             imageVector = Icons.Filled.VolumeUp,
-                            contentDescription = "Озвучить ещё раз",
+                            contentDescription = s.replayTooltip,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp),
                         )
@@ -863,7 +1078,7 @@ private fun MessageBubble(
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Share,
-                                contentDescription = "Отправить",
+                                contentDescription = s.shareTooltip,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(15.dp),
                             )
@@ -873,12 +1088,12 @@ private fun MessageBubble(
                             onDismissRequest = { shareMenu = false },
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Текстом") },
+                                text = { Text(s.shareAsText) },
                                 onClick = { shareMenu = false; onShareText() },
                             )
                             if (!fromPartner) {
                                 DropdownMenuItem(
-                                    text = { Text("Голосом · аудио по-китайски") },
+                                    text = { Text(s.shareAsVoice) },
                                     onClick = { shareMenu = false; onShareAudio() },
                                 )
                             }
@@ -903,15 +1118,15 @@ private fun MessageBubble(
     }
 }
 
-// ---------- Живая строка распознавания ----------
+// ---------- Живая строка ----------
 
 @Composable
-private fun LiveLine(state: UiState, onStopSpeaking: () -> Unit) {
+private fun LiveLine(state: UiState, s: AppStrings, onStopSpeaking: () -> Unit) {
     val text = when {
-        state.speaking -> "Озвучиваю перевод…"
+        state.speaking -> s.speakingNow
         state.listening && state.partial.isNotBlank() -> state.partial
-        state.listening && state.mode == Mode.LISTEN_CHINESE -> "Слушаю собеседника…"
-        state.listening && state.mode == Mode.REPLY_RUSSIAN -> "Говорите по-русски…"
+        state.listening && state.mode == Mode.LISTEN_CHINESE -> s.listeningPartner
+        state.listening && state.mode == Mode.REPLY_RUSSIAN -> s.speakRussianNow
         else -> null
     }
     var lastText by remember { mutableStateOf("") }
@@ -946,7 +1161,7 @@ private fun LiveLine(state: UiState, onStopSpeaking: () -> Unit) {
                     IconButton(onClick = onStopSpeaking, modifier = Modifier.size(30.dp)) {
                         Icon(
                             imageVector = Icons.Filled.Stop,
-                            contentDescription = "Остановить озвучку",
+                            contentDescription = s.stopSpeakTooltip,
                             tint = TolmachColors.Coral,
                             modifier = Modifier.size(18.dp),
                         )
@@ -957,7 +1172,6 @@ private fun LiveLine(state: UiState, onStopSpeaking: () -> Unit) {
     }
 }
 
-/** Живой индикатор: полоски дышат от реального уровня микрофона. */
 @Composable
 private fun EqualizerBars(level: Float, color: Color) {
     val smooth by animateFloatAsState(
@@ -986,6 +1200,7 @@ private fun EqualizerBars(level: Float, color: Color) {
 @Composable
 private fun ControlDeck(
     state: UiState,
+    s: AppStrings,
     onToggleListen: () -> Unit,
     onReply: () -> Unit,
     onPhrasebook: () -> Unit,
@@ -993,21 +1208,21 @@ private fun ControlDeck(
     val listening = state.mode == Mode.LISTEN_CHINESE
     val replying = state.mode == Mode.REPLY_RUSSIAN
 
-    Column(modifier = Modifier.padding(bottom = 14.dp)) {
+    Column(modifier = Modifier.padding(bottom = 10.dp)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(1.dp)
                 .background(MaterialTheme.colorScheme.outlineVariant),
         )
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             DeckSideButton(
                 icon = Icons.Filled.Bolt,
-                label = "Фразы",
+                label = s.deckPhrases,
                 active = false,
                 accent = TolmachColors.Gold,
                 modifier = Modifier.weight(1f),
@@ -1017,10 +1232,10 @@ private fun ControlDeck(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.weight(1.4f),
             ) {
-                ListenOrb(listening = listening, onClick = onToggleListen)
+                ListenOrb(listening = listening, s = s, onClick = onToggleListen)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = if (listening) "Остановить" else "Слушать китайский",
+                    text = if (listening) s.deckStop else s.deckListen,
                     style = MaterialTheme.typography.labelMedium,
                     color = if (listening) {
                         TolmachColors.Coral
@@ -1032,7 +1247,7 @@ private fun ControlDeck(
             }
             DeckSideButton(
                 icon = Icons.Filled.Mic,
-                label = "Ответить",
+                label = s.deckReply,
                 active = replying,
                 accent = TolmachColors.Jade,
                 modifier = Modifier.weight(1f),
@@ -1043,7 +1258,7 @@ private fun ControlDeck(
 }
 
 @Composable
-private fun ListenOrb(listening: Boolean, onClick: () -> Unit) {
+private fun ListenOrb(listening: Boolean, s: AppStrings, onClick: () -> Unit) {
     val transition = rememberInfiniteTransition(label = "orb")
     val pulse by transition.animateFloat(
         initialValue = 1f,
@@ -1099,7 +1314,7 @@ private fun ListenOrb(listening: Boolean, onClick: () -> Unit) {
             Crossfade(targetState = listening, label = "orbIcon") { active ->
                 Icon(
                     imageVector = if (active) Icons.Filled.Stop else Icons.Filled.Mic,
-                    contentDescription = if (active) "Остановить" else "Слушать китайский",
+                    contentDescription = if (active) s.deckStop else s.deckListen,
                     tint = if (active) TolmachColors.JadeDeep else TolmachColors.Jade,
                     modifier = Modifier.size(34.dp),
                 )
@@ -1132,7 +1347,11 @@ private fun DeckSideButton(
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (active) TolmachColors.JadeDeep else accent,
+                tint = if (active) {
+                    TolmachColors.JadeDeep
+                } else {
+                    accent
+                },
                 modifier = Modifier.size(22.dp),
             )
         }
@@ -1146,454 +1365,384 @@ private fun DeckSideButton(
     }
 }
 
-// ---------- Разговорник Agroplanet ----------
+// ---------- Вкладка «Фразы» ----------
 
 @Composable
-private fun PhrasebookDialog(
-    customPhrases: List<Phrase>,
+private fun PhrasesScreen(
+    state: UiState,
     onPick: (Phrase) -> Unit,
     onRemoveCustom: (Phrase) -> Unit,
     onAddOwn: () -> Unit,
-    onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Быстрые фразы") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 440.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
+    val s = strings(state.appLanguage)
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
+        ) {
+            Text(
+                text = s.phrasesTitle,
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onAddOwn) { Text(s.phrasesAdd) }
+        }
+        Text(
+            text = s.phrasesHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            if (state.customPhrases.isNotEmpty()) {
                 Text(
-                    text = "Нажмите фразу — телефон сразу произнесёт её " +
-                        "по-китайски и добавит в ленту переговоров.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = s.myPhrases.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TolmachColors.Gold,
+                    modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
                 )
-                if (customPhrases.isNotEmpty()) {
-                    Text(
-                        text = "МОИ ФРАЗЫ",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TolmachColors.Gold,
-                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                    )
-                    customPhrases.forEach { phrase ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { onPick(phrase) }
-                                    .padding(vertical = 8.dp),
-                            ) {
-                                Text(
-                                    text = phrase.russian,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onBackground,
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    text = phrase.chinese,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            IconButton(onClick = { onRemoveCustom(phrase) }) {
-                                Icon(
-                                    imageVector = Icons.Filled.Delete,
-                                    contentDescription = "Удалить",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant),
-                        )
-                    }
-                }
-                BuiltInPhrases.groupBy { it.category }.forEach { (category, phrases) ->
-                    Text(
-                        text = category.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TolmachColors.Gold,
-                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                    )
-                    phrases.forEach { phrase ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPick(phrase) }
-                                .padding(vertical = 8.dp),
-                        ) {
-                            Text(
-                                text = phrase.russian,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onBackground,
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = phrase.chinese,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant),
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Закрыть") }
-        },
-        dismissButton = {
-            TextButton(onClick = onAddOwn) { Text("Добавить свою") }
-        },
-    )
-}
-
-// ---------- Диалоги ----------
-
-@Composable
-private fun GlossaryDialog(
-    entries: List<GlossaryEntry>,
-    onAdd: (String, String) -> Unit,
-    onRemove: (GlossaryEntry) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var from by remember { mutableStateOf("") }
-    var to by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Словарь терминов") },
-        text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text(
-                    text = "Замены применяются к готовому переводу — сорта, " +
-                        "ГОСТы, базисы поставки. Пример: «инкотермс» → «Incoterms».",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(12.dp))
-                entries.forEach { entry ->
+                state.customPhrases.forEach { phrase ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
-                            text = "${entry.from} → ${entry.to}",
-                            style = MaterialTheme.typography.bodyMedium,
+                        PhraseRow(
+                            phrase = phrase,
+                            onClick = { onPick(phrase) },
                             modifier = Modifier.weight(1f),
                         )
-                        IconButton(onClick = { onRemove(entry) }) {
+                        IconButton(onClick = { onRemoveCustom(phrase) }) {
                             Icon(
                                 imageVector = Icons.Filled.Delete,
-                                contentDescription = "Удалить",
+                                contentDescription = s.deleteTooltip,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp),
                             )
                         }
                     }
+                    PhraseDivider()
                 }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = from,
-                    onValueChange = { from = it },
-                    label = { Text("Как переводит сейчас") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = to,
-                    onValueChange = { to = it },
-                    label = { Text("Как должно быть") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (from.isNotBlank() && to.isNotBlank()) {
-                        onAdd(from.trim(), to.trim())
-                        from = ""
-                        to = ""
-                    }
-                },
-            ) { Text("Добавить") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Готово") }
-        },
-    )
+            BuiltInPhrases.groupBy { it.category }.forEach { (category, phrases) ->
+                Text(
+                    text = s.categoryLabel(category).uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TolmachColors.Gold,
+                    modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
+                )
+                phrases.forEach { phrase ->
+                    PhraseRow(
+                        phrase = phrase,
+                        onClick = { onPick(phrase) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    PhraseDivider()
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 }
 
 @Composable
-private fun SettingsDialog(
-    currentTag: String,
-    onSelectTag: (String) -> Unit,
-    russianRoute: String,
-    chineseRoute: String,
-    onRussianRoute: (String) -> Unit,
-    onChineseRoute: (String) -> Unit,
-    onTestRussian: () -> Unit,
-    onTestChinese: () -> Unit,
-    useDeepL: Boolean,
-    deepLKey: String,
-    onUseDeepL: (Boolean) -> Unit,
-    onDeepLKey: (String) -> Unit,
-    chineseRate: Float,
-    onChineseRate: (Float) -> Unit,
-    confirmReply: Boolean,
-    onConfirmReply: (Boolean) -> Unit,
-    russianVoice: String,
-    chineseVoice: String,
-    onRussianVoice: (String) -> Unit,
-    onChineseVoice: (String) -> Unit,
-    ruVoices: List<Pair<String, String>>,
-    zhVoices: List<Pair<String, String>>,
-    onDismiss: () -> Unit,
+private fun PhraseRow(phrase: Phrase, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clickable(onClick = onClick)
+            .padding(vertical = 9.dp),
+    ) {
+        Text(
+            text = phrase.russian,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = phrase.chinese,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun PhraseDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant),
+    )
+}
+
+// ---------- Вкладка «Настройки» ----------
+
+@Composable
+private fun SettingsScreen(
+    state: UiState,
+    viewModel: TranslatorViewModel,
+    onOpenGlossary: () -> Unit,
+    onOpenPreflight: () -> Unit,
+    onOpenAbout: () -> Unit,
 ) {
+    val s = strings(state.appLanguage)
     val languages = listOf(
-        "zh-CN" to "Путунхуа — стандартный китайский (рекомендуется)",
-        "zh-TW" to "Тайваньский мандарин",
-        "yue-Hant-HK" to "Кантонский — Гонконг, Гуандун (экспериментально)",
+        "zh-CN" to s.dialectMandarinFull,
+        "zh-TW" to s.dialectTaiwanFull,
+        "yue-Hant-HK" to s.dialectCantoneseFull,
     )
     val russianRoutes = listOf(
-        AudioRoutes.SYSTEM to "Авто — как решит телефон",
-        AudioRoutes.BLUETOOTH to "Bluetooth-наушники",
-        AudioRoutes.WIRED to "Проводные / USB-наушники",
-        AudioRoutes.SPEAKER to "Динамик телефона",
+        AudioRoutes.SYSTEM to s.ruRouteAuto,
+        AudioRoutes.BLUETOOTH to s.ruRouteBt,
+        AudioRoutes.WIRED to s.ruRouteWired,
+        AudioRoutes.SPEAKER to s.ruRouteSpeaker,
     )
     val chineseRoutes = listOf(
-        AudioRoutes.SPEAKER to "Динамик телефона (рекомендуется)",
-        AudioRoutes.WIRED to "Проводные / USB — вторая пара",
-        AudioRoutes.BLUETOOTH to "Bluetooth-наушники",
+        AudioRoutes.SPEAKER to s.zhRouteSpeaker,
+        AudioRoutes.WIRED to s.zhRouteWired,
+        AudioRoutes.BLUETOOTH to s.zhRouteBt,
     )
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Настройки") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 460.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                SectionHeader("Быстрые схемы звука")
-                PresetRow(
-                    title = "Динамик для собеседника",
-                    subtitle = "Русский — в ваши наушники, китайский — из динамика телефона.",
-                    onClick = {
-                        onRussianRoute(AudioRoutes.SYSTEM)
-                        onChineseRoute(AudioRoutes.SPEAKER)
-                    },
-                )
-                PresetRow(
-                    title = "Две пары наушников",
-                    subtitle = "Русский — в Bluetooth, китайский — в проводные/USB.",
-                    onClick = {
-                        onRussianRoute(AudioRoutes.BLUETOOTH)
-                        onChineseRoute(AudioRoutes.WIRED)
-                    },
-                )
-                PresetRow(
-                    title = "Дистанционный звонок",
-                    subtitle = "Созвон идёт на втором устройстве на громкой связи рядом: " +
-                        "русский — вам, китайский — из динамика в его микрофон.",
-                    onClick = {
-                        onRussianRoute(AudioRoutes.SYSTEM)
-                        onChineseRoute(AudioRoutes.SPEAKER)
-                    },
-                )
-                PresetRow(
-                    title = "Наушник у собеседника",
-                    subtitle = "Китайский — в Bluetooth собеседнику, русский — из динамика вам.",
-                    onClick = {
-                        onRussianRoute(AudioRoutes.SPEAKER)
-                        onChineseRoute(AudioRoutes.BLUETOOTH)
-                    },
-                )
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            text = s.settingsTitle,
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            SectionHeader(s.sectionLanguage)
+            RouteOption(
+                label = s.languageRu,
+                selected = state.appLanguage == "ru",
+                onClick = { viewModel.setAppLanguage("ru") },
+            )
+            RouteOption(
+                label = s.languageZh,
+                selected = state.appLanguage == "zh",
+                onClick = { viewModel.setAppLanguage("zh") },
+            )
 
-                SectionHeader("Язык собеседника")
-                languages.forEach { (tag, label) ->
-                    RouteOption(
-                        label = label,
-                        selected = currentTag == tag,
-                        onClick = { onSelectTag(tag) },
-                    )
-                }
+            SectionHeader(s.sectionTools)
+            PresetRow(
+                title = s.toolPreflight,
+                subtitle = s.toolPreflightHint,
+                onClick = onOpenPreflight,
+            )
+            PresetRow(
+                title = s.toolGlossary,
+                subtitle = s.toolGlossaryHint,
+                onClick = onOpenGlossary,
+            )
+            PresetRow(
+                title = s.toolGuide,
+                subtitle = s.toolGuideHint,
+                onClick = viewModel::showGuideAgain,
+            )
+            PresetRow(
+                title = s.toolAbout,
+                subtitle = s.toolAboutHint,
+                onClick = onOpenAbout,
+            )
 
-                SectionHeader("Русский перевод — куда звучит")
-                russianRoutes.forEach { (route, label) ->
-                    RouteOption(
-                        label = label,
-                        selected = russianRoute == route,
-                        onClick = { onRussianRoute(route) },
-                    )
-                }
-                TextButton(
-                    onClick = onTestRussian,
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                ) { Text("Проверить русский канал") }
+            SectionHeader(s.sectionPresets)
+            PresetRow(
+                title = s.presetSpeakerTitle,
+                active = state.russianRoute == AudioRoutes.SYSTEM && state.chineseRoute == AudioRoutes.SPEAKER,
+                subtitle = s.presetSpeakerHint,
+                onClick = {
+                    viewModel.setRussianRoute(AudioRoutes.SYSTEM)
+                    viewModel.setChineseRoute(AudioRoutes.SPEAKER)
+                },
+            )
+            PresetRow(
+                title = s.presetTwoPairsTitle,
+                active = state.russianRoute == AudioRoutes.BLUETOOTH && state.chineseRoute == AudioRoutes.WIRED,
+                subtitle = s.presetTwoPairsHint,
+                onClick = {
+                    viewModel.setRussianRoute(AudioRoutes.BLUETOOTH)
+                    viewModel.setChineseRoute(AudioRoutes.WIRED)
+                },
+            )
+            PresetRow(
+                title = s.presetRemoteTitle,
+                active = state.russianRoute == AudioRoutes.SYSTEM && state.chineseRoute == AudioRoutes.SPEAKER,
+                subtitle = s.presetRemoteHint,
+                onClick = {
+                    viewModel.setRussianRoute(AudioRoutes.SYSTEM)
+                    viewModel.setChineseRoute(AudioRoutes.SPEAKER)
+                },
+            )
+            PresetRow(
+                title = s.presetPartnerBtTitle,
+                active = state.russianRoute == AudioRoutes.SPEAKER && state.chineseRoute == AudioRoutes.BLUETOOTH,
+                subtitle = s.presetPartnerBtHint,
+                onClick = {
+                    viewModel.setRussianRoute(AudioRoutes.SPEAKER)
+                    viewModel.setChineseRoute(AudioRoutes.BLUETOOTH)
+                },
+            )
 
-                SectionHeader("Китайский перевод — куда звучит")
-                chineseRoutes.forEach { (route, label) ->
-                    RouteOption(
-                        label = label,
-                        selected = chineseRoute == route,
-                        onClick = { onChineseRoute(route) },
-                    )
-                }
-                TextButton(
-                    onClick = onTestChinese,
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                ) { Text("Проверить китайский канал") }
-
-                SectionHeader("Движок перевода")
+            SectionHeader(s.sectionDialect)
+            languages.forEach { (tag, label) ->
                 RouteOption(
-                    label = "Офлайн — ML Kit, работает без интернета",
-                    selected = !useDeepL,
-                    onClick = { onUseDeepL(false) },
+                    label = label,
+                    selected = state.chineseLanguageTag == tag,
+                    onClick = { viewModel.setChineseLanguage(tag) },
                 )
-                RouteOption(
-                    label = "DeepL — максимум качества (интернет + ключ)",
-                    selected = useDeepL,
-                    onClick = { onUseDeepL(true) },
-                )
-                if (useDeepL) {
-                    Spacer(Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = deepLKey,
-                        onValueChange = onDeepLKey,
-                        label = { Text("Ключ DeepL API") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "Бесплатный ключ: deepl.com → тариф «DeepL API Free», " +
-                            "500 000 знаков в месяц. Без интернета или при любой " +
-                            "ошибке приложение мгновенно переключится на офлайн-перевод.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            }
 
-                SectionHeader("Скорость китайской озвучки")
-                Text(
-                    text = "%.2f".format(chineseRate) +
-                        "× — медленнее звучит разборчивее для собеседника",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            SectionHeader(s.sectionRuRoute)
+            russianRoutes.forEach { (route, label) ->
+                RouteOption(
+                    label = label,
+                    selected = state.russianRoute == route,
+                    onClick = { viewModel.setRussianRoute(route) },
                 )
-                Slider(
-                    value = chineseRate,
-                    onValueChange = onChineseRate,
-                    valueRange = 0.7f..1.2f,
+            }
+            TextButton(
+                onClick = viewModel::testRussianVoice,
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+            ) { Text(s.testRuChannel) }
+
+            SectionHeader(s.sectionZhRoute)
+            chineseRoutes.forEach { (route, label) ->
+                RouteOption(
+                    label = label,
+                    selected = state.chineseRoute == route,
+                    onClick = { viewModel.setChineseRoute(route) },
+                )
+            }
+            TextButton(
+                onClick = viewModel::testChineseVoice,
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+            ) { Text(s.testZhChannel) }
+
+            SectionHeader(s.sectionEngine)
+            RouteOption(
+                label = s.engineOffline,
+                selected = !state.useDeepL,
+                onClick = { viewModel.setUseDeepL(false) },
+            )
+            RouteOption(
+                label = s.engineDeepL,
+                selected = state.useDeepL,
+                onClick = { viewModel.setUseDeepL(true) },
+            )
+            if (state.useDeepL) {
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = state.deepLKey,
+                    onValueChange = viewModel::setDeepLKey,
+                    label = { Text(s.deepLKeyLabel) },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-
-                SectionHeader("Ответ по-русски")
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Проверять фразу перед озвучкой",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                        Text(
-                            text = "покажет распознанный текст — можно поправить " +
-                                "до того, как собеседник услышит перевод",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = confirmReply, onCheckedChange = onConfirmReply)
-                }
-
-                SectionHeader("Голос русской озвучки")
-                if (ruVoices.isEmpty()) {
-                    Text(
-                        text = "Голоса появятся после инициализации синтеза",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    RouteOption(
-                        label = "Системный по умолчанию",
-                        selected = russianVoice.isBlank(),
-                        onClick = { onRussianVoice("") },
-                    )
-                    ruVoices.forEach { (name, label) ->
-                        RouteOption(
-                            label = label,
-                            selected = russianVoice == name,
-                            onClick = { onRussianVoice(name) },
-                        )
-                    }
-                }
-
-                SectionHeader("Голос китайской озвучки")
-                if (zhVoices.isEmpty()) {
-                    Text(
-                        text = "Голоса появятся после инициализации синтеза",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    RouteOption(
-                        label = "Системный по умолчанию",
-                        selected = chineseVoice.isBlank(),
-                        onClick = { onChineseVoice("") },
-                    )
-                    zhVoices.forEach { (name, label) ->
-                        RouteOption(
-                            label = label,
-                            selected = chineseVoice == name,
-                            onClick = { onChineseVoice(name) },
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "Схема «две пары наушников»: русская сторона — Bluetooth, " +
-                        "китайская — проводные или USB-C наушники. Два Bluetooth " +
-                        "с разным звуком Android не поддерживает — это ограничение " +
-                        "системы на любых телефонах. Вторую пару берите без " +
-                        "микрофона, иначе телефон начнёт слушать её микрофон " +
-                        "вместо своего. Если выбранных наушников нет, звук мягко " +
-                        "уйдёт на динамик (китайский) или системный маршрут (русский).",
+                    text = s.deepLHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Готово") }
-        },
-    )
+
+            SectionHeader(s.sectionRate)
+            Text(
+                text = s.rateLine("%.2f".format(state.chineseRate)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Slider(
+                value = state.chineseRate,
+                onValueChange = viewModel::setChineseRate,
+                valueRange = 0.7f..1.2f,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            SectionHeader(s.sectionConfirm)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = s.confirmTitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        text = s.confirmHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = state.confirmReply,
+                    onCheckedChange = viewModel::setConfirmReply,
+                )
+            }
+
+            SectionHeader(s.sectionRuVoice)
+            if (state.ruVoices.isEmpty()) {
+                Text(
+                    text = s.voicesLoading,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                RouteOption(
+                    label = s.voiceSystemDefault,
+                    selected = state.russianVoice.isBlank(),
+                    onClick = { viewModel.setRussianVoice("") },
+                )
+                state.ruVoices.forEach { (name, label) ->
+                    RouteOption(
+                        label = label,
+                        selected = state.russianVoice == name,
+                        onClick = { viewModel.setRussianVoice(name) },
+                    )
+                }
+            }
+
+            SectionHeader(s.sectionZhVoice)
+            if (state.zhVoices.isEmpty()) {
+                Text(
+                    text = s.voicesLoading,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                RouteOption(
+                    label = s.voiceSystemDefault,
+                    selected = state.chineseVoice.isBlank(),
+                    onClick = { viewModel.setChineseVoice("") },
+                )
+                state.zhVoices.forEach { (name, label) ->
+                    RouteOption(
+                        label = label,
+                        selected = state.chineseVoice == name,
+                        onClick = { viewModel.setChineseVoice(name) },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = s.settingsFootnote,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(18.dp))
+        }
+    }
 }
 
 @Composable
@@ -1602,7 +1751,7 @@ private fun SectionHeader(title: String) {
         text = title.uppercase(),
         style = MaterialTheme.typography.labelSmall,
         color = TolmachColors.Gold,
-        modifier = Modifier.padding(top = 14.dp, bottom = 4.dp),
+        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
     )
 }
 
@@ -1624,109 +1773,33 @@ private fun RouteOption(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ComposeDialog(
-    onSpeak: (String) -> Unit,
-    onSave: (String) -> Unit,
-    onDismiss: () -> Unit,
+private fun PresetRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
 ) {
-    var text by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Написать по-русски") },
-        text = {
-            Column {
-                Text(
-                    text = "Телефон переведёт фразу и произнесёт её по-китайски. " +
-                        "Удобно в шумном зале и для точных формулировок. " +
-                        "«В разговорник» — сохранит фразу с переводом в «Мои фразы».",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    label = { Text("Ваша фраза") },
-                    minLines = 2,
-                    maxLines = 4,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = text.isNotBlank(),
-                onClick = {
-                    onSpeak(text)
-                    onDismiss()
-                },
-            ) { Text("Перевести и озвучить") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(
-                    enabled = text.isNotBlank(),
-                    onClick = {
-                        onSave(text)
-                        onDismiss()
-                    },
-                ) { Text("В разговорник") }
-                TextButton(onClick = onDismiss) { Text("Отмена") }
-            }
-        },
-    )
-}
-
-@Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val version = remember {
-        runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: ""
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Толмач $version") },
-        text = {
-            Column {
-                Text(
-                    text = "Переводчик переговоров для ТОО «AGROPLANET», Костанай.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Перевод и лента работают офлайн. Русский канал — " +
-                        "наушники вашей стороны, китайский — динамик или вторая " +
-                        "пара. Юридически значимые условия контракта " +
-                        "перепроверяйте с живым переводчиком.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Готово") }
-        },
-    )
-}
-
-@Composable
-private fun PresetRow(title: String, subtitle: String, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (active) TolmachColors.Jade else MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            if (active) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(TolmachColors.Jade, CircleShape),
+                )
+            }
+        }
         Spacer(Modifier.height(2.dp))
         Text(
             text = subtitle,
@@ -1742,8 +1815,176 @@ private fun PresetRow(title: String, subtitle: String, onClick: () -> Unit) {
     )
 }
 
+// ---------- Диалоги ----------
+
+@Composable
+private fun GlossaryDialog(
+    s: AppStrings,
+    entries: List<GlossaryEntry>,
+    onAdd: (String, String) -> Unit,
+    onRemove: (GlossaryEntry) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var from by remember { mutableStateOf("") }
+    var to by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(s.glossaryTitle) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    text = s.glossaryHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                entries.forEach { entry ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = entry.from + " → " + entry.to,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { onRemove(entry) }) {
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = s.deleteTooltip,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = from,
+                    onValueChange = { from = it },
+                    label = { Text(s.glossaryFrom) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = to,
+                    onValueChange = { to = it },
+                    label = { Text(s.glossaryTo) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (from.isNotBlank() && to.isNotBlank()) {
+                        onAdd(from.trim(), to.trim())
+                        from = ""
+                        to = ""
+                    }
+                },
+            ) { Text(s.addAction) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(s.doneAction) }
+        },
+    )
+}
+
+@Composable
+private fun ComposeDialog(
+    s: AppStrings,
+    onSpeak: (String) -> Unit,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(s.composeTitle) },
+        text = {
+            Column {
+                Text(
+                    text = s.composeHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(s.composeLabel) },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = text.isNotBlank(),
+                onClick = {
+                    onSpeak(text)
+                    onDismiss()
+                },
+            ) { Text(s.composeSpeak) }
+        },
+        dismissButton = {
+            Row {
+                TextButton(
+                    enabled = text.isNotBlank(),
+                    onClick = {
+                        onSave(text)
+                        onDismiss()
+                    },
+                ) { Text(s.composeSave) }
+                TextButton(onClick = onDismiss) { Text(s.cancelAction) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun AboutDialog(s: AppStrings, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val version = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: ""
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(s.aboutTitle(version)) },
+        text = {
+            Column {
+                Text(
+                    text = s.aboutLine1,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = s.aboutLine2,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(s.doneAction) }
+        },
+    )
+}
+
 @Composable
 private fun PreflightDialog(
+    s: AppStrings,
     state: UiState,
     micGranted: Boolean,
     volumePercent: Int,
@@ -1759,7 +2000,7 @@ private fun PreflightDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Проверка перед встречей") },
+        title = { Text(s.preflightTitle) },
         text = {
             Column(
                 modifier = Modifier
@@ -1767,71 +2008,66 @@ private fun PreflightDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 CheckRow(
-                    label = "Микрофон разрешён",
+                    label = s.checkMic,
                     ok = micGranted,
-                    detail = if (micGranted) {
-                        null
-                    } else {
-                        "Android спросит разрешение при первом нажатии записи"
-                    },
+                    detail = if (micGranted) null else s.checkMicHintNo,
                 )
                 CheckRow(
-                    label = "Перевод готов",
+                    label = s.checkTranslation,
                     ok = translationOk,
                     detail = when {
-                        deepLActive -> "движок DeepL, офлайн — как страховка"
-                        state.modelsReady -> "офлайн-модели на месте"
-                        else -> "модели ещё не скачаны — нужен интернет"
+                        deepLActive -> s.checkTranslationDeepL
+                        state.modelsReady -> s.checkTranslationOffline
+                        else -> s.checkTranslationNo
                     },
                 )
                 CheckRow(
-                    label = "Русский голос установлен",
+                    label = s.checkRuVoice,
                     ok = state.voiceRussianOk,
-                    detail = if (state.voiceRussianOk) null else "докачайте в настройках синтеза речи",
+                    detail = if (state.voiceRussianOk) null else s.checkVoiceHintNo,
                 )
                 CheckRow(
-                    label = "Китайский голос установлен",
+                    label = s.checkZhVoice,
                     ok = state.voiceChineseOk,
-                    detail = if (state.voiceChineseOk) null else "докачайте в настройках синтеза речи",
+                    detail = if (state.voiceChineseOk) null else s.checkVoiceHintNo,
                 )
                 if (!state.voiceRussianOk || !state.voiceChineseOk) {
                     TextButton(
                         onClick = onOpenTtsSettings,
                         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
-                    ) { Text("Открыть настройки синтеза") }
+                    ) { Text(s.openTtsSettings) }
                 }
                 CheckRow(
-                    label = "Наушники",
+                    label = s.checkHeadphones,
                     ok = headphonesOk,
                     detail = when {
-                        state.bluetoothConnected && state.wiredConnected -> "две пары: Bluetooth и провод/USB"
-                        state.bluetoothConnected -> "Bluetooth подключены"
-                        state.wiredConnected -> "проводные/USB подключены"
-                        else -> "нет — русский перевод пойдёт в динамик"
+                        state.bluetoothConnected && state.wiredConnected -> s.headphonesDetailTwo
+                        state.bluetoothConnected -> s.headphonesDetailBt
+                        state.wiredConnected -> s.headphonesDetailWired
+                        else -> s.headphonesDetailNone
                     },
                 )
                 CheckRow(
-                    label = "Громкость медиа",
+                    label = s.checkVolume,
                     ok = volumePercent >= 25,
-                    detail = "$volumePercent%" +
-                        if (volumePercent < 25) " — прибавьте боковыми кнопками" else "",
+                    detail = s.volumeDetail(volumePercent),
                 )
                 Spacer(Modifier.height(6.dp))
                 Row {
                     TextButton(
                         onClick = onTestRussian,
                         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
-                    ) { Text("Тест русского") }
+                    ) { Text(s.testRuShort) }
                     Spacer(Modifier.width(10.dp))
                     TextButton(
                         onClick = onTestChinese,
                         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
-                    ) { Text("Тест китайского") }
+                    ) { Text(s.testZhShort) }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Готово") }
+            TextButton(onClick = onDismiss) { Text(s.doneAction) }
         },
     )
 }
@@ -1872,6 +2108,7 @@ private fun CheckRow(label: String, ok: Boolean, detail: String? = null) {
 
 @Composable
 private fun ReplyConfirmDialog(
+    s: AppStrings,
     initial: String,
     onConfirm: (String) -> Unit,
     onCancel: () -> Unit,
@@ -1880,12 +2117,11 @@ private fun ReplyConfirmDialog(
     AlertDialog(
         onDismissRequest = onCancel,
         containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Проверьте фразу") },
+        title = { Text(s.replyConfirmTitle) },
         text = {
             Column {
                 Text(
-                    text = "Так вас услышал телефон. Поправьте при необходимости — " +
-                        "и собеседник получит точный перевод.",
+                    text = s.replyConfirmHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1903,10 +2139,10 @@ private fun ReplyConfirmDialog(
             TextButton(
                 enabled = text.isNotBlank(),
                 onClick = { onConfirm(text) },
-            ) { Text("Озвучить по-китайски") }
+            ) { Text(s.replyConfirmSpeak) }
         },
         dismissButton = {
-            TextButton(onClick = onCancel) { Text("Отмена") }
+            TextButton(onClick = onCancel) { Text(s.cancelAction) }
         },
     )
 }

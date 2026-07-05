@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Tolmach" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/tolmach_bg</item>
-        <item name="android:statusBarColor">@color/tolmach_bg</item>
-        <item name="android:navigationBarColor">@color/tolmach_bg</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#FF0C0F12</item>
+        <item name="android:statusBarColor">#FF0C0F12</item>
+        <item name="android:navigationBarColor">#FF0C0F12</item>
+    </style>
+
+    <style name="Theme.Tolmach.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#FF0C0F12</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Tolmach</item>
     </style>
 </resources>

@@ -25,6 +25,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:theme="@style/Theme.Tolmach.Splash"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter>

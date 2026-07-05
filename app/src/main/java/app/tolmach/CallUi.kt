@@ -1,12 +1,14 @@
 package app.tolmach
 
 import android.content.Intent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -54,11 +56,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.tolmach.ui.TolmachColors
 
-/** Полноэкранный слой защищённого P2P-звонка. */
+/** Вкладка «Звонок»: защищённый P2P-звонок, полностью двуязычный. */
 @Composable
-fun CallOverlay(
+fun CallScreen(
     state: UiState,
-    errorText: String?,
     onCreate: () -> Unit,
     onBeginJoin: () -> Unit,
     onSubmitJoinCode: (String) -> Unit,
@@ -68,108 +69,103 @@ fun CallOverlay(
     onOpenPhrases: () -> Unit,
     onOpenCompose: () -> Unit,
     onEnd: () -> Unit,
-    onClose: () -> Unit,
 ) {
+    val s = strings(state.appLanguage)
     val context = LocalContext.current
 
     fun sendCode(code: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(
-                Intent.EXTRA_TEXT,
-                "Код для защищённого звонка «Толмач»:\n$code",
-            )
+            putExtra(Intent.EXTRA_TEXT, s.callShareText(code))
         }
-        context.startActivity(Intent.createChooser(intent, "Отправить код"))
+        context.startActivity(Intent.createChooser(intent, s.callChooserTitle))
     }
 
-    Box(
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .fillMaxSize()
-            .background(TolmachColors.Bg.copy(alpha = 0.985f)),
-        contentAlignment = Alignment.Center,
+            .verticalScroll(rememberScrollState()),
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 26.dp)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            Spacer(Modifier.height(30.dp))
-            CallOrb(connected = state.callState == "connected")
-            Spacer(Modifier.height(14.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.Lock,
-                    contentDescription = null,
-                    tint = TolmachColors.Jade,
-                    modifier = Modifier.size(13.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = "Сквозное шифрование DTLS-SRTP",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = callStatusTitle(state),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                textAlign = TextAlign.Center,
+        Spacer(Modifier.height(26.dp))
+        CallOrb(connected = state.callState == "connected")
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.Lock,
+                contentDescription = null,
+                tint = TolmachColors.Jade,
+                modifier = Modifier.size(13.dp),
             )
-            if (errorText != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = errorText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TolmachColors.Coral,
-                    textAlign = TextAlign.Center,
-                )
-            }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = s.callEncryption,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = callStatusTitle(state, s),
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(18.dp))
 
-            when (state.callState) {
-                "menu" -> CallMenu(onCreate, onBeginJoin, onClose)
+        Crossfade(targetState = state.callState, label = "callPhase") { phase ->
+            when (phase) {
+                "idle" -> CallIntro(s = s, onCreate = onCreate, onBeginJoin = onBeginJoin)
 
-                "preparing", "preparing_answer" -> Text(
-                    text = "Готовлю код соединения…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                "preparing", "preparing_answer" -> Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = s.callPreparingCode,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    WaitingDots()
+                }
 
                 "wait_answer" -> CodeExchange(
+                    s = s,
                     myCode = state.callLocalCode,
-                    inputLabel = "Вставьте код-ответ собеседника",
-                    submitLabel = "Соединить",
-                    hint = "Шаг 1: отправьте свой код собеседнику. " +
-                        "Шаг 2: вставьте его код-ответ и нажмите «Соединить».",
+                    inputLabel = s.callAnswerLabel,
+                    submitLabel = s.callConnectAction,
+                    hint = s.callWaitHint,
                     onSend = { sendCode(state.callLocalCode) },
                     onSubmit = onSubmitAnswerCode,
                 )
 
-                "join_input" -> JoinInput(onSubmitJoinCode)
+                "join_input" -> JoinInput(s = s, onSubmit = onSubmitJoinCode)
 
                 "answer_ready" -> CodeExchange(
+                    s = s,
                     myCode = state.callLocalCode,
                     inputLabel = null,
                     submitLabel = null,
-                    hint = "Отправьте этот код-ответ звонящему — соединение " +
-                        "установится автоматически.",
+                    hint = s.callAnswerReadyHint,
                     onSend = { sendCode(state.callLocalCode) },
                     onSubmit = null,
                 )
 
-                "connecting" -> Text(
-                    text = "Устанавливаю прямое соединение…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                "connecting" -> Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = s.callConnecting,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    WaitingDots()
+                }
 
                 "connected" -> ConnectedControls(
                     state = state,
+                    s = s,
                     onToggleMute = onToggleMute,
                     onToggleSpeaker = onToggleSpeaker,
                     onOpenPhrases = onOpenPhrases,
@@ -177,31 +173,53 @@ fun CallOverlay(
                 )
 
                 "failed" -> Text(
-                    text = "Соединение не удалось. Прямые P2P-звонки блокируются " +
-                        "некоторыми сетями и фаерволом КНР — попробуйте другой " +
-                        "интернет или схему «второе устройство».",
+                    text = s.callFailedBody,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
             }
-
-            Spacer(Modifier.height(22.dp))
-            if (state.callState == "connected") {
-                EndCallButton(onEnd)
-            } else if (state.callState != "menu") {
-                TextButton(onClick = onClose) { Text("Отменить") }
-            }
-            Spacer(Modifier.height(26.dp))
         }
+
+        Spacer(Modifier.height(22.dp))
+        if (state.callState == "connected") {
+            EndCallButton(s = s, onEnd = onEnd)
+        } else if (state.callState != "idle") {
+            TextButton(onClick = onEnd) { Text(s.callCancel) }
+        }
+        Spacer(Modifier.height(20.dp))
     }
 }
 
-private fun callStatusTitle(state: UiState): String = when (state.callState) {
-    "menu" -> "Защищённый звонок"
+private fun callStatusTitle(state: UiState, s: AppStrings): String = when (state.callState) {
+    "idle" -> s.callTitleIdle
     "connected" -> formatCallTime(state.callSeconds)
-    "failed" -> "Не удалось соединиться"
-    else -> "Подготовка звонка"
+    "failed" -> s.callTitleFailed
+    else -> s.callTitlePreparing
+}
+
+/** Три пульсирующие точки — «приложение думает». */
+@Composable
+private fun WaitingDots() {
+    val transition = rememberInfiniteTransition(label = "dots")
+    val progress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Restart),
+        label = "dotsProgress",
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        for (index in 0..2) {
+            val phase = (progress + index * 0.33f) % 1f
+            val dotAlpha = 0.25f + 0.75f * (if (phase < 0.5f) phase * 2f else (1f - phase) * 2f)
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .graphicsLayer { alpha = dotAlpha }
+                    .background(TolmachColors.Jade, CircleShape),
+            )
+        }
+    }
 }
 
 private fun formatCallTime(totalSeconds: Int): String {
@@ -211,37 +229,25 @@ private fun formatCallTime(totalSeconds: Int): String {
 }
 
 @Composable
-private fun CallMenu(
-    onCreate: () -> Unit,
-    onBeginJoin: () -> Unit,
-    onClose: () -> Unit,
-) {
+private fun CallIntro(s: AppStrings, onCreate: () -> Unit, onBeginJoin: () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
         CallChoice(
-            title = "Создать звонок",
-            subtitle = "Получите код и отправьте его собеседнику любым мессенджером.",
+            title = s.callCreate,
+            subtitle = s.callCreateHint,
             onClick = onCreate,
         )
         Spacer(Modifier.height(10.dp))
         CallChoice(
-            title = "Присоединиться",
-            subtitle = "Вставьте код, который прислал звонящий.",
+            title = s.callJoin,
+            subtitle = s.callJoinHint,
             onClick = onBeginJoin,
         )
         Spacer(Modifier.height(14.dp))
         Text(
-            text = "Звук идёт напрямую телефон-телефон, без серверов, всегда " +
-                "зашифрован. В звонке работают «Фразы» и «Написать» — китайская " +
-                "озвучка уходит собеседнику. Честно: сети КНР блокируют прямые " +
-                "P2P-соединения — с материковым Китаем нужен VPN у партнёра; " +
-                "синхронный перевод его речи в звонке на одном телефоне " +
-                "невозможен (микрофон занят звонком) — для этого схема " +
-                "«второе устройство».",
+            text = s.callIntroBody,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onClose) { Text("Закрыть") }
     }
 }
 
@@ -250,10 +256,7 @@ private fun CallChoice(title: String, subtitle: String, onClick: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outline,
-        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
@@ -275,33 +278,34 @@ private fun CallChoice(title: String, subtitle: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun JoinInput(onSubmit: (String) -> Unit) {
+private fun JoinInput(s: AppStrings, onSubmit: (String) -> Unit) {
     var code by remember { mutableStateOf("") }
+    val clipboard = LocalClipboardManager.current
     Column(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = code,
             onValueChange = { code = it },
-            label = { Text("Код приглашения") },
+            label = { Text(s.callInviteLabel) },
             minLines = 2,
             maxLines = 4,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
-        val clipboard = LocalClipboardManager.current
         Row {
             TextButton(
                 onClick = { clipboard.getText()?.text?.let { code = it } },
-            ) { Text("Вставить из буфера") }
+            ) { Text(s.callPaste) }
             TextButton(
                 enabled = code.isNotBlank(),
                 onClick = { onSubmit(code) },
-            ) { Text("Продолжить") }
+            ) { Text(s.callContinue) }
         }
     }
 }
 
 @Composable
 private fun CodeExchange(
+    s: AppStrings,
     myCode: String,
     inputLabel: String?,
     submitLabel: String?,
@@ -310,6 +314,7 @@ private fun CodeExchange(
     onSubmit: ((String) -> Unit)?,
 ) {
     var answer by remember { mutableStateOf("") }
+    val clipboard = LocalClipboardManager.current
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = hint,
@@ -331,12 +336,11 @@ private fun CodeExchange(
             )
         }
         Spacer(Modifier.height(6.dp))
-        val clipboard = LocalClipboardManager.current
         Row {
-            TextButton(onClick = onSend) { Text("Отправить код") }
+            TextButton(onClick = onSend) { Text(s.callSendCode) }
             TextButton(
                 onClick = { clipboard.setText(AnnotatedString(myCode)) },
-            ) { Text("Копировать") }
+            ) { Text(s.callCopy) }
         }
         if (inputLabel != null && submitLabel != null && onSubmit != null) {
             Spacer(Modifier.height(10.dp))
@@ -352,7 +356,7 @@ private fun CodeExchange(
             Row {
                 TextButton(
                     onClick = { clipboard.getText()?.text?.let { answer = it } },
-                ) { Text("Вставить из буфера") }
+                ) { Text(s.callPaste) }
                 TextButton(
                     enabled = answer.isNotBlank(),
                     onClick = { onSubmit(answer) },
@@ -365,6 +369,7 @@ private fun CodeExchange(
 @Composable
 private fun ConnectedControls(
     state: UiState,
+    s: AppStrings,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
     onOpenPhrases: () -> Unit,
@@ -372,8 +377,7 @@ private fun ConnectedControls(
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
-            text = "Говорите — связь прямая и зашифрованная. «Фразы» и «Написать» " +
-                "озвучат китайский прямо в звонок.",
+            text = s.callConnectedHint,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -385,26 +389,26 @@ private fun ConnectedControls(
         ) {
             CallRoundButton(
                 icon = if (state.callMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                label = if (state.callMuted) "Вкл. микр." else "Микрофон",
+                label = if (state.callMuted) s.callMicOff else s.callMicOn,
                 active = !state.callMuted,
                 onClick = onToggleMute,
             )
             CallRoundButton(
                 icon = Icons.Filled.Bolt,
-                label = "Фразы",
+                label = s.callPhrases,
                 active = false,
                 accentGold = true,
                 onClick = onOpenPhrases,
             )
             CallRoundButton(
                 icon = Icons.Filled.Keyboard,
-                label = "Написать",
+                label = s.callCompose,
                 active = false,
                 onClick = onOpenCompose,
             )
             CallRoundButton(
                 icon = Icons.Filled.VolumeUp,
-                label = if (state.callSpeakerOn) "Динамик" else "У уха",
+                label = if (state.callSpeakerOn) s.callSpeaker else s.callEarpiece,
                 active = state.callSpeakerOn,
                 onClick = onToggleSpeaker,
             )
@@ -451,7 +455,7 @@ private fun CallRoundButton(
 }
 
 @Composable
-private fun EndCallButton(onEnd: () -> Unit) {
+private fun EndCallButton(s: AppStrings, onEnd: () -> Unit) {
     Box(
         modifier = Modifier
             .size(64.dp)
@@ -461,7 +465,7 @@ private fun EndCallButton(onEnd: () -> Unit) {
     ) {
         Icon(
             imageVector = Icons.Filled.CallEnd,
-            contentDescription = "Завершить",
+            contentDescription = s.callEndTooltip,
             tint = TolmachColors.Bg,
             modifier = Modifier.size(28.dp),
         )
@@ -482,11 +486,11 @@ private fun CallOrb(connected: Boolean) {
     )
     val ringAlpha = ((1.4f - pulse) / 0.4f) * 0.4f
 
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(120.dp)) {
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(112.dp)) {
         if (connected) {
             Box(
                 modifier = Modifier
-                    .size(96.dp)
+                    .size(92.dp)
                     .graphicsLayer {
                         scaleX = pulse
                         scaleY = pulse
@@ -497,7 +501,7 @@ private fun CallOrb(connected: Boolean) {
         }
         Box(
             modifier = Modifier
-                .size(96.dp)
+                .size(92.dp)
                 .background(TolmachColors.Surface, CircleShape)
                 .border(
                     1.dp,

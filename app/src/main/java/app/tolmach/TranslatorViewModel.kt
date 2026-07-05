@@ -60,6 +60,9 @@ data class UiState(
     val confirmReply: Boolean = false,
     val pendingReply: String? = null,
     val shareAudioPath: String? = null,
+    val showGuide: Boolean = false,
+    val appLanguage: String = "ru",
+    val showLanguagePicker: Boolean = false,
     val callState: String = "idle",
     val callLocalCode: String = "",
     val callSeconds: Int = 0,
@@ -156,6 +159,11 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         onVoicesLoaded = { russian, chinese ->
             _state.update { it.copy(ruVoices = russian, zhVoices = chinese) }
         },
+        onVoiceMissing = { chinese ->
+            _state.update {
+                it.copy(error = strings(it.appLanguage).voiceMissing(chinese))
+            }
+        },
     )
 
     private val deviceCallback = object : AudioDeviceCallback() {
@@ -184,6 +192,9 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 deepLKey = prefs.getString("deepl_key", "") ?: "",
                 chineseRate = prefs.getFloat("zh_rate", 0.95f),
                 confirmReply = prefs.getBoolean("confirm_reply", false),
+            showGuide = !prefs.getBoolean("guide_shown", false),
+            appLanguage = prefs.getString("app_language", "ru") ?: "ru",
+            showLanguagePicker = prefs.getString("app_language", null) == null,
                 russianVoice = prefs.getString("voice_ru", "") ?: "",
                 chineseVoice = prefs.getString("voice_zh", "") ?: "",
             )
@@ -297,12 +308,40 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                         error = if (success) {
                             it.error
                         } else {
-                            "Не удалось подготовить аудио — проверьте китайский голос."
+                            strings(it.appLanguage).shareAudioFailed
                         },
                     )
                 }
             }
         }
+    }
+
+    /** Краткий гид: показывается при первом запуске, повторно — из Настроек. */
+    fun dismissGuide() {
+        prefs.edit().putBoolean("guide_shown", true).apply()
+        _state.update { it.copy(showGuide = false) }
+    }
+
+    /** Язык интерфейса: выбирается при первом входе и в Настройках. */
+    fun setAppLanguage(language: String) {
+        prefs.edit().putString("app_language", language).apply()
+        _state.update { it.copy(appLanguage = language, showLanguagePicker = false) }
+    }
+
+    private fun callErrorText(key: String): String {
+        val s = strings(_state.value.appLanguage)
+        return when {
+            key == "invite" -> s.callErrInvite
+            key == "answer" -> s.callErrAnswer
+            key == "ice" -> s.callErrIce
+            key.startsWith("prepare:") -> s.callErrPrepare(key.removePrefix("prepare:"))
+            key.startsWith("apply:") -> s.callErrApply(key.removePrefix("apply:"))
+            else -> key
+        }
+    }
+
+    fun showGuideAgain() {
+        _state.update { it.copy(showGuide = true) }
     }
 
     fun clearShareAudio() {
@@ -354,7 +393,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value.russianVoice,
             )
         } else {
-            voice.speakChineseAloud(message.translated, _state.value.chineseRoute, _state.value.chineseRate, _state.value.chineseVoice)
+            voice.speakChineseAloud(message.translated, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
         }
     }
 
@@ -385,7 +424,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 voice.speakChineseAloud(translated, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(error = "Перевод не удался: ${e.message ?: "проверьте модели"}")
+                    it.copy(error = translationFailureMessage(e))
                 }
             }
         }
@@ -403,17 +442,21 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                         useDeepL = _state.value.useDeepL,
                         deepLKey = _state.value.deepLKey,
                     ))
-                val updated = _state.value.customPhrases + Phrase("Мои фразы", text, translated)
+                val updated = _state.value.customPhrases + Phrase(
+                    russian = text,
+                    chinese = translated,
+                    category = "Мои фразы",
+                )
                 _state.update {
                     it.copy(
                         customPhrases = updated,
-                        error = "Сохранено в раздел «Мои фразы».",
+                        error = strings(it.appLanguage).savedToMyPhrases,
                     )
                 }
                 persistCustomPhrases(updated)
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(error = "Не удалось перевести фразу: ${e.message ?: "проверьте модели"}")
+                    it.copy(error = translationFailureMessage(e))
                 }
             }
         }
@@ -497,6 +540,17 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Внутренняя логика ----------
 
+    /** Человеческое объяснение вместо общего «не удался». */
+    private fun translationFailureMessage(e: Exception): String {
+        val s = strings(_state.value.appLanguage)
+        val deepLActive = _state.value.useDeepL && _state.value.deepLKey.isNotBlank()
+        return if (!_state.value.modelsReady && !deepLActive) {
+            s.modelsNotReady
+        } else {
+            s.translationFailed(e.message)
+        }
+    }
+
     private fun downloadModelsAsync() {
         viewModelScope.launch {
             try {
@@ -552,7 +606,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 } catch (e: Exception) {
                     _state.update {
-                        it.copy(error = "Перевод не удался: ${e.message ?: "проверьте модели"}")
+                        it.copy(error = translationFailureMessage(e))
                     }
                     restartRecognitionSoon(_state.value.chineseLanguageTag)
                 }
@@ -585,7 +639,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 voice.speakChineseAloud(translated, _state.value.chineseRoute, _state.value.chineseRate, _state.value.chineseVoice)
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(error = "Перевод не удался: ${e.message ?: "проверьте модели"}")
+                    it.copy(error = translationFailureMessage(e))
                 }
                 finishReply()
             }
@@ -823,7 +877,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _state.update { it.copy(callLocalCode = code, callState = phase) }
             },
-            onError = { message -> _state.update { it.copy(error = message) } },
+            onError = { key -> _state.update { it.copy(error = callErrorText(key)) } },
         )
         callEngine = created
         return created

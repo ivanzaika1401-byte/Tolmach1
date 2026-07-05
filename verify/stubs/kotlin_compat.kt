@@ -5,3 +5,5 @@ fun <T> buildList(builderAction: MutableList<T>.() -> Unit): List<T> =
 
 fun StringBuilder.appendLine(value: String): StringBuilder = append(value).append('\n')
 fun StringBuilder.appendLine(): StringBuilder = append('\n')
+
+fun String.uppercase(): String = toUpperCase()

@@ -15,7 +15,7 @@ class PhrasesTest {
 
     @Test
     fun phrasebookIsComplete() {
-        assertTrue("слишком мало фраз", BuiltInPhrases.size >= 15)
+        assertTrue("слишком мало фраз", BuiltInPhrases.size >= 38)
         val categories = BuiltInPhrases.map { it.category }.distinct()
         assertTrue(
             "категории или их порядок изменились: $categories",
@@ -24,6 +24,7 @@ class PhrasesTest {
                 "Продукция и качество",
                 "Цена и условия",
                 "Логистика",
+                "Документы",
                 "Ход переговоров",
             ),
         )

@@ -5,17 +5,30 @@ open class Context {
         if (name == AUDIO_SERVICE) android.media.AudioManager() else null
     open val cacheDir: File = File("/tmp")
     open val packageName: String = "app.tolmach"
+    open val packageManager: android.content.pm.PackageManager
+        get() = android.content.pm.PackageManager()
     open fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
         MemoryPrefs.of(name)
+    open fun startActivity(intent: Intent) {}
     companion object {
         const val AUDIO_SERVICE = "audio"
         const val MODE_PRIVATE = 0
     }
 }
 class Intent(action: String) {
+    var type: String? = null
     fun putExtra(key: String, value: String): Intent = this
     fun putExtra(key: String, value: Boolean): Intent = this
     fun putExtra(key: String, value: Int): Intent = this
+    fun putExtra(key: String, value: android.net.Uri): Intent = this
+    fun addFlags(flags: Int): Intent = this
+    companion object {
+        const val ACTION_SEND = "android.intent.action.SEND"
+        const val EXTRA_TEXT = "android.intent.extra.TEXT"
+        const val EXTRA_STREAM = "android.intent.extra.STREAM"
+        const val FLAG_GRANT_READ_URI_PERMISSION = 1
+        fun createChooser(target: Intent, title: CharSequence?): Intent = target
+    }
 }
 interface SharedPreferences {
     fun getString(key: String, defValue: String?): String?
@@ -30,7 +43,6 @@ interface SharedPreferences {
         fun apply()
     }
 }
-/** Рабочее in-memory хранилище: персистентность проверяется по-настоящему. */
 class MemoryPrefs private constructor() : SharedPreferences {
     private val map = HashMap<String, Any?>()
     override fun getString(key: String, defValue: String?): String? =

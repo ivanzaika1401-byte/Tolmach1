@@ -46,6 +46,7 @@ class CallEngine(
 
     fun startAsCaller() {
         codeSent = false
+        post { onState("preparing") }
         setUp()
         val constraints = offerConstraints()
         peer?.createOffer(
@@ -54,7 +55,6 @@ class CallEngine(
             }),
             constraints,
         )
-        post { onState("preparing") }
     }
 
     fun startAsJoiner(inviteCode: String) {
@@ -62,10 +62,11 @@ class CallEngine(
         setUp()
         val remote = decode(inviteCode)
         if (remote == null) {
-            post { onError("Код приглашения не распознан — скопируйте его целиком.") }
+            post { onError("invite") }
             post { onState("failed") }
             return
         }
+        post { onState("preparing") }
         peer?.setRemoteDescription(
             sdpObserver(onSet = {
                 peer?.createAnswer(
@@ -77,18 +78,17 @@ class CallEngine(
             }),
             remote,
         )
-        post { onState("preparing") }
     }
 
     /** Звонящий вставляет код-ответ собеседника — соединение стартует. */
     fun acceptAnswer(answerCode: String) {
         val remote = decode(answerCode)
         if (remote == null) {
-            post { onError("Код ответа не распознан — скопируйте его целиком.") }
+            post { onError("answer") }
             return
         }
-        peer?.setRemoteDescription(sdpObserver(), remote)
         post { onState("connecting") }
+        peer?.setRemoteDescription(sdpObserver(), remote)
     }
 
     fun setMuted(muted: Boolean) {
@@ -125,6 +125,22 @@ class CallEngine(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
                 .createIceServer(),
             PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302")
+                .createIceServer(),
+            // Публичный TURN-ретранслятор (Open Relay Project, metered.ca):
+            // дожимает соединение через «симметричные» NAT мобильных
+            // операторов. Ретранслирует только зашифрованные DTLS-SRTP
+            // пакеты — расшифровать голос физически не может.
+            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
+                .setUsername("openrelayproject")
+                .setPassword("openrelayproject")
+                .createIceServer(),
+            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443")
+                .setUsername("openrelayproject")
+                .setPassword("openrelayproject")
+                .createIceServer(),
+            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443?transport=tcp")
+                .setUsername("openrelayproject")
+                .setPassword("openrelayproject")
                 .createIceServer(),
         )
         val config = PeerConnection.RTCConfiguration(iceServers).apply {
@@ -185,10 +201,7 @@ class CallEngine(
 
                 PeerConnection.IceConnectionState.FAILED ->
                     post {
-                        onError(
-                            "Соединение не пробилось через сеть — попробуйте другой " +
-                                "Wi-Fi или мобильный интернет.",
-                        )
+                        onError("ice")
                         onState("failed")
                     }
 
@@ -228,11 +241,11 @@ class CallEngine(
         }
 
         override fun onCreateFailure(error: String?) {
-            post { onError("Не удалось подготовить звонок: ${error ?: ""}") }
+            post { onError("prepare:" + (error ?: "")) }
         }
 
         override fun onSetFailure(error: String?) {
-            post { onError("Не удалось применить код: ${error ?: ""}") }
+            post { onError("apply:" + (error ?: "")) }
         }
     }
 

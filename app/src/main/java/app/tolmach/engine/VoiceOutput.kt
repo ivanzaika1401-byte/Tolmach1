@@ -47,6 +47,7 @@ class VoiceOutput(
         russian: List<Pair<String, String>>,
         chinese: List<Pair<String, String>>,
     ) -> Unit = { _, _ -> },
+    private val onVoiceMissing: (chinese: Boolean) -> Unit = {},
 ) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -87,7 +88,10 @@ class VoiceOutput(
     /** Русский перевод — по выбранному маршруту и выбранным голосом. */
     fun speakRussian(text: String, route: String, voiceName: String) {
         val engine = tts ?: return
-        applyVoice(engine, Locale("ru", "RU"), voiceName)
+        if (!applyVoice(engine, Locale("ru", "RU"), voiceName)) {
+            reportVoiceMissing(chinese = false)
+            return
+        }
         engine.setSpeechRate(1.0f)
         if (route == AudioRoutes.SYSTEM) {
             setSpeaking(true)
@@ -101,7 +105,10 @@ class VoiceOutput(
     /** Китайский перевод — маршрут, скорость и голос настраиваются. */
     fun speakChineseAloud(text: String, route: String, rate: Float, voiceName: String) {
         val engine = tts ?: return
-        applyVoice(engine, Locale.SIMPLIFIED_CHINESE, voiceName)
+        if (!applyVoice(engine, Locale.SIMPLIFIED_CHINESE, voiceName)) {
+            reportVoiceMissing(chinese = true)
+            return
+        }
         engine.setSpeechRate(rate)
         speakViaFile(engine, text, route, chineseFile, ZH_FILE)
     }
@@ -122,7 +129,11 @@ class VoiceOutput(
             onDone(false)
             return
         }
-        applyVoice(engine, Locale.SIMPLIFIED_CHINESE, voiceName)
+        if (!applyVoice(engine, Locale.SIMPLIFIED_CHINESE, voiceName)) {
+            mainHandler.post { onVoiceMissing(true) }
+            onDone(false)
+            return
+        }
         engine.setSpeechRate(rate)
         shareCallback = onDone
         val result = engine.synthesizeToFile(text, Bundle(), outFile, SHARE_FILE)
@@ -151,17 +162,18 @@ class VoiceOutput(
         engine: TextToSpeech,
         locale: Locale,
         voiceName: String,
-    ) {
+    ): Boolean {
         val voice = if (voiceName.isBlank()) {
             null
         } else {
             runCatching { engine.voices }.getOrNull()
                 ?.firstOrNull { it.name == voiceName }
         }
-        if (voice != null) {
+        return if (voice != null) {
             engine.voice = voice
+            true
         } else {
-            engine.setLanguage(locale)
+            engine.setLanguage(locale) >= 0
         }
     }
 
@@ -179,6 +191,13 @@ class VoiceOutput(
                 val kind = if (voice.isNetworkConnectionRequired) "сеть" else "офлайн"
                 voice.name to "Голос ${index + 1} · $kind"
             }
+    }
+
+    /** Голоса нет: сообщаем и эмулируем цикл озвучки для штатного продолжения. */
+    private fun reportVoiceMissing(chinese: Boolean) {
+        mainHandler.post { onVoiceMissing(chinese) }
+        setSpeaking(true)
+        setSpeaking(false)
     }
 
     private fun speakViaFile(

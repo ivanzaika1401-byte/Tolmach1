@@ -28,6 +28,7 @@ class SpeechEngine(
 
     private var recognizer: SpeechRecognizer? = null
     private var language: String = "zh-CN"
+    private var lastPartial: String = ""
 
     var isListening: Boolean = false
         private set
@@ -41,6 +42,7 @@ class SpeechEngine(
             return
         }
         language = languageTag
+        lastPartial = ""
         destroyRecognizer()
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).also {
             it.setRecognitionListener(listener)
@@ -94,14 +96,20 @@ class SpeechEngine(
             val text = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
-            if (!text.isNullOrBlank()) onPartial(text)
+            if (!text.isNullOrBlank()) {
+                lastPartial = text
+                onPartial(text)
+            }
         }
 
         override fun onResults(results: Bundle?) {
-            val text = results
+            val recognized = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
                 .orEmpty()
+            // Болячка Android: частичный текст полный, финал пустой - спасаем фразу.
+            val text = if (recognized.isBlank()) lastPartial else recognized
+            lastPartial = ""
             isListening = false
             onStateChange(false)
             onFinal(text)
@@ -116,7 +124,11 @@ class SpeechEngine(
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
                 SpeechRecognizer.ERROR_CLIENT,
-                -> onFinal("")
+                -> {
+                    val salvaged = lastPartial
+                    lastPartial = ""
+                    onFinal(salvaged)
+                }
 
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
                     onError("Нет доступа к микрофону — разрешите запись звука в настройках.")

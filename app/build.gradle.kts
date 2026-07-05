@@ -12,8 +12,8 @@ android {
         applicationId = "app.tolmach"
         minSdk = 26
         targetSdk = 34
-        versionCode = 17
-        versionName = "3.9.0"
+        versionCode = 28
+        versionName = "4.4.0"
     }
 
     buildTypes {
@@ -46,6 +46,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.core:core-ktx:1.13.1")
