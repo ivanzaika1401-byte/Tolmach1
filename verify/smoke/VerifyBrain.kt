@@ -28,6 +28,11 @@ fun main() {
         brain.state.value.appLanguage == "zh" && !brain.state.value.showLanguagePicker,
         "язык переключён на китайский, пикер закрыт",
     )
+    ok(
+        brain.state.value.russianRoute == AudioRoutes.SPEAKER &&
+            brain.state.value.chineseRoute == AudioRoutes.SYSTEM,
+        "первый выбор 中文 перевернул каналы по умолчанию",
+    )
 
     brain.setChineseLanguage("yue-Hant-HK")
     ok(brain.state.value.chineseLanguageTag == "yue-Hant-HK", "смена диалекта")
@@ -62,11 +67,19 @@ fun main() {
     ok(brain.state.value.messages.size == 2, "набранная фраза легла в ленту")
     ok("[fake-translate]" in composed.translated, "перевод прошёл через движок")
     ok("Incoterms" in composed.translated, "глоссарий применён к переводу")
+    ok(
+        composed.original == "Договор по инкотермс готов",
+        "зеркало: оригинал набранной фразы сохранён",
+    )
 
     brain.addCustomPhrase("Сколько тонн в одном вагоне?")
     val custom = brain.state.value.customPhrases
     ok(custom.size == 1, "своя фраза добавлена")
-    ok("[fake-translate]" in custom.first().chinese, "своя фраза переведена")
+    ok("[fake-translate]" in custom.first().russian, "зеркало: перевод в русском поле")
+    ok(
+        custom.first().chinese == "Сколько тонн в одном вагоне?",
+        "зеркало: оригинал оператора в китайском поле",
+    )
 
     ok(brain.mediaVolumePercent() == 60, "процент громкости: 9 из 15 = 60")
 

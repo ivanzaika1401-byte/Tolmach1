@@ -660,6 +660,7 @@ private fun TranslatorScreen(
             onReplay = onReplay,
             onShareText = onShareText,
             onShareAudio = onShareAudio,
+            operatorZh = state.appLanguage == "zh",
             modifier = Modifier.weight(1f),
         )
         LiveLine(state = state, s = s, onStopSpeaking = onStopSpeaking)
@@ -919,6 +920,7 @@ private fun ConversationList(
     onReplay: (ChatMessage) -> Unit,
     onShareText: (ChatMessage) -> Unit,
     onShareAudio: (ChatMessage) -> Unit,
+    operatorZh: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -985,6 +987,7 @@ private fun ConversationList(
                         MessageBubble(
                             message = message,
                             s = s,
+                            operatorZh = operatorZh,
                             onReplay = { onReplay(message) },
                             onShareText = { onShareText(message) },
                             onShareAudio = { onShareAudio(message) },
@@ -994,6 +997,7 @@ private fun ConversationList(
                     MessageBubble(
                         message = message,
                         s = s,
+                        operatorZh = operatorZh,
                         onReplay = { onReplay(message) },
                         onShareText = { onShareText(message) },
                         onShareAudio = { onShareAudio(message) },
@@ -1008,6 +1012,7 @@ private fun ConversationList(
 private fun MessageBubble(
     message: ChatMessage,
     s: AppStrings,
+    operatorZh: Boolean,
     onReplay: () -> Unit,
     onShareText: () -> Unit,
     onShareAudio: () -> Unit,
@@ -1091,7 +1096,7 @@ private fun MessageBubble(
                                 text = { Text(s.shareAsText) },
                                 onClick = { shareMenu = false; onShareText() },
                             )
-                            if (!fromPartner) {
+                            if (fromPartner == operatorZh) {
                                 DropdownMenuItem(
                                     text = { Text(s.shareAsVoice) },
                                     onClick = { shareMenu = false; onShareAudio() },
@@ -1490,6 +1495,18 @@ private fun SettingsScreen(
     onOpenAbout: () -> Unit,
 ) {
     val s = strings(state.appLanguage)
+    val operatorZh = state.appLanguage == "zh"
+    val quietRoute = if (operatorZh) state.chineseRoute else state.russianRoute
+    val loudRoute = if (operatorZh) state.russianRoute else state.chineseRoute
+    fun applyPreset(quiet: String, loud: String) {
+        if (operatorZh) {
+            viewModel.setChineseRoute(quiet)
+            viewModel.setRussianRoute(loud)
+        } else {
+            viewModel.setRussianRoute(quiet)
+            viewModel.setChineseRoute(loud)
+        }
+    }
     val languages = listOf(
         "zh-CN" to s.dialectMandarinFull,
         "zh-TW" to s.dialectTaiwanFull,
@@ -1556,38 +1573,34 @@ private fun SettingsScreen(
             SectionHeader(s.sectionPresets)
             PresetRow(
                 title = s.presetSpeakerTitle,
-                active = state.russianRoute == AudioRoutes.SYSTEM && state.chineseRoute == AudioRoutes.SPEAKER,
+                active = quietRoute == AudioRoutes.SYSTEM && loudRoute == AudioRoutes.SPEAKER,
                 subtitle = s.presetSpeakerHint,
                 onClick = {
-                    viewModel.setRussianRoute(AudioRoutes.SYSTEM)
-                    viewModel.setChineseRoute(AudioRoutes.SPEAKER)
+                    applyPreset(AudioRoutes.SYSTEM, AudioRoutes.SPEAKER)
                 },
             )
             PresetRow(
                 title = s.presetTwoPairsTitle,
-                active = state.russianRoute == AudioRoutes.BLUETOOTH && state.chineseRoute == AudioRoutes.WIRED,
+                active = quietRoute == AudioRoutes.BLUETOOTH && loudRoute == AudioRoutes.WIRED,
                 subtitle = s.presetTwoPairsHint,
                 onClick = {
-                    viewModel.setRussianRoute(AudioRoutes.BLUETOOTH)
-                    viewModel.setChineseRoute(AudioRoutes.WIRED)
+                    applyPreset(AudioRoutes.BLUETOOTH, AudioRoutes.WIRED)
                 },
             )
             PresetRow(
                 title = s.presetRemoteTitle,
-                active = state.russianRoute == AudioRoutes.SYSTEM && state.chineseRoute == AudioRoutes.SPEAKER,
+                active = quietRoute == AudioRoutes.SYSTEM && loudRoute == AudioRoutes.SPEAKER,
                 subtitle = s.presetRemoteHint,
                 onClick = {
-                    viewModel.setRussianRoute(AudioRoutes.SYSTEM)
-                    viewModel.setChineseRoute(AudioRoutes.SPEAKER)
+                    applyPreset(AudioRoutes.SYSTEM, AudioRoutes.SPEAKER)
                 },
             )
             PresetRow(
                 title = s.presetPartnerBtTitle,
-                active = state.russianRoute == AudioRoutes.SPEAKER && state.chineseRoute == AudioRoutes.BLUETOOTH,
+                active = quietRoute == AudioRoutes.SPEAKER && loudRoute == AudioRoutes.BLUETOOTH,
                 subtitle = s.presetPartnerBtHint,
                 onClick = {
-                    viewModel.setRussianRoute(AudioRoutes.SPEAKER)
-                    viewModel.setChineseRoute(AudioRoutes.BLUETOOTH)
+                    applyPreset(AudioRoutes.SPEAKER, AudioRoutes.BLUETOOTH)
                 },
             )
 

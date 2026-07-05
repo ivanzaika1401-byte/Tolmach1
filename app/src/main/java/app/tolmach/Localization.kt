@@ -516,11 +516,11 @@ object ZhStrings : AppStrings {
     override val tabSettings = "设置"
 
     override val brandTagline = "中哈商务谈判"
-    override val menuCompose = "输入俄语句子"
+    override val menuCompose = "输入中文句子"
     override val menuShareTranscript = "发送谈判记录"
     override val menuShareFile = "记录导出为文件 (.txt)"
     override val menuClear = "清空对话"
-    override val composeTooltip = "输入俄语句子"
+    override val composeTooltip = "输入中文句子"
     override val menuTooltip = "菜单"
 
     override val translationDeepL = "翻译：DeepL"
@@ -546,8 +546,8 @@ object ZhStrings : AppStrings {
         "会话开始 " + start + " · 共 " + count + " 条"
 
     override val emptyTitle = "把手机放在桌上，麦克风朝向对方"
-    override val emptyBody = "按绿色按钮，对方的中文会译成俄语送入耳机；" +
-        "按«回复»说俄语，手机用中文朗读给对方。" +
+    override val emptyBody = "按绿色按钮，对方的俄语会译成中文送入您的耳机；" +
+        "按«回复»说中文，手机用俄语朗读给对方。" +
         "«短语»页有现成的商务用语，一键播放。"
 
     override val youLabel = "我方"
@@ -564,10 +564,10 @@ object ZhStrings : AppStrings {
 
     override val speakingNow = "正在朗读译文…"
     override val listeningPartner = "正在聆听对方…"
-    override val speakRussianNow = "请说俄语…"
+    override val speakRussianNow = "请说中文…"
     override val stopSpeakTooltip = "停止朗读"
     override val deckPhrases = "短语"
-    override val deckListen = "聆听中文"
+    override val deckListen = "聆听俄语"
     override val deckStop = "停止"
     override val deckReply = "回复"
 
@@ -576,7 +576,7 @@ object ZhStrings : AppStrings {
 
     override val phrasesTitle = "常用短语"
     override val phrasesAdd = "添加"
-    override val phrasesHint = "点击短语即用中文朗读并写入记录；" +
+    override val phrasesHint = "点击短语即用俄语朗读给对方并写入记录；" +
         "通话中会直接送入通话声道。"
     override val myPhrases = "我的短语"
     override val deleteTooltip = "删除"
@@ -601,7 +601,7 @@ object ZhStrings : AppStrings {
     override val callJoinHint = "粘贴发起方发来的连接码。"
     override val callIntroBody = "任意网络均可使用：手机流量或Wi-Fi，双方无需" +
         "同一网络，可身处不同国家。语音全程加密；内置TURN中继可穿透复杂NAT" +
-        "（只转发加密数据包）。通话中可用«短语»和«输入»——中文语音直接送给" +
+        "（只转发加密数据包）。通话中可用«短语»和«输入»——俄语语音直接送给" +
         "对方。提示：中国大陆网络会屏蔽P2P，需开启VPN。"
     override val callPreparingCode = "正在生成连接码…"
     override val callWaitHint = "第一步：把您的连接码发给对方。" +
@@ -611,7 +611,7 @@ object ZhStrings : AppStrings {
     override val callAnswerReadyHint = "把此应答码发回给发起方，连接将自动建立。"
     override val callConnecting = "正在建立直连…"
     override val callConnectedHint = "请讲话——连接为直连并已加密。" +
-        "«短语»和«输入»会把中文直接播入通话。"
+        "«短语»和«输入»会把俄语直接播给对方。"
     override val callFailedBody = "连接失败。请把其中一方在Wi-Fi与手机流量之间" +
         "切换后重试；中国大陆网络屏蔽P2P，需使用VPN。"
     override val callInviteLabel = "连接码"
@@ -645,14 +645,14 @@ object ZhStrings : AppStrings {
     override val toolAboutHint = "版本信息与声道说明。"
     override val sectionPresets = "音频快捷方案"
     override val presetSpeakerTitle = "扬声器给对方"
-    override val presetSpeakerHint = "俄语进您的耳机，中文从手机扬声器播出。"
+    override val presetSpeakerHint = "给您的译文进耳机，给对方的从扬声器播出。"
     override val presetTwoPairsTitle = "两副耳机"
-    override val presetTwoPairsHint = "俄语走蓝牙，中文走有线/USB耳机。"
+    override val presetTwoPairsHint = "您的译文走蓝牙，对方的走有线/USB耳机。"
     override val presetRemoteTitle = "远程通话"
     override val presetRemoteHint = "通话在旁边第二台设备免提进行：" +
-        "俄语给您，中文由扬声器播入其麦克风。"
+        "给您的译文进耳机，给对方的由扬声器播入其麦克风。"
     override val presetPartnerBtTitle = "对方戴耳机"
-    override val presetPartnerBtHint = "中文走蓝牙给对方，俄语从扬声器给您。"
+    override val presetPartnerBtHint = "对方的译文走蓝牙给他，给您的从扬声器播出。"
     override val sectionDialect = "对方语言"
     override val dialectMandarinFull = "普通话——标准中文（推荐）"
     override val dialectTaiwanFull = "台湾华语"
@@ -688,11 +688,11 @@ object ZhStrings : AppStrings {
         "所选耳机不在时，声音自动回落到扬声器（中文）或系统路径（俄语）。"
 
     override val guideTitle = "使用指南"
-    override val guideListenTitle = "聆听中文"
+    override val guideListenTitle = "聆听俄语"
     override val guideListenText = "手机放桌上麦克风朝向对方，按绿色按钮，" +
-        "译文将轻声送入您的耳机。"
+        "中文译文将轻声送入您的耳机。"
     override val guideReplyTitle = "回复"
-    override val guideReplyText = "说一句俄语，手机会用中文从扬声器朗读给对方。"
+    override val guideReplyText = "说一句中文，手机会用俄语从扬声器朗读给对方。"
     override val guideMoreTitle = "短语与通话"
     override val guideMoreText = "现成商务短语在«短语»页；" +
         "与伙伴的加密通话在«通话»页。"
@@ -711,10 +711,10 @@ object ZhStrings : AppStrings {
     override val addAction = "添加"
     override val doneAction = "完成"
 
-    override val composeTitle = "输入俄语句子"
-    override val composeHint = "输入俄语，手机将译成中文并朗读。" +
+    override val composeTitle = "输入中文句子"
+    override val composeHint = "输入中文，手机将译成俄语并朗读给对方。" +
         "«存入短语»会把该句连同译文保存到«我的短语»。"
-    override val composeLabel = "您的句子（俄语）"
+    override val composeLabel = "您的句子（中文）"
     override val composeSpeak = "翻译并朗读"
     override val composeSave = "存入短语"
     override val cancelAction = "取消"

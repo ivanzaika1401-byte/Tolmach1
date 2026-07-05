@@ -218,7 +218,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
             recognitionErrorStreak = 0
             maybeWarnLowVolume()
             _state.update { it.copy(mode = Mode.LISTEN_CHINESE, partial = "") }
-            speech.start(_state.value.chineseLanguageTag)
+            speech.start(partnerSpeechTag())
         }
     }
 
@@ -234,7 +234,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         voice.stop()
         recognitionErrorStreak = 0
         _state.update { it.copy(mode = Mode.REPLY_RUSSIAN, partial = "") }
-        speech.start("ru-RU")
+        speech.start(operatorSpeechTag())
     }
 
     /** Смена языка собеседника: путунхуа, тайваньский мандарин или кантонский. */
@@ -244,7 +244,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(chineseLanguageTag = tag) }
         if (wasListening) {
             speech.stop()
-            speech.start(tag)
+            speech.start(partnerSpeechTag())
         }
     }
 
@@ -324,8 +324,14 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Язык интерфейса: выбирается при первом входе и в Настройках. */
     fun setAppLanguage(language: String) {
+        val firstPick = _state.value.showLanguagePicker
         prefs.edit().putString("app_language", language).apply()
         _state.update { it.copy(appLanguage = language, showLanguagePicker = false) }
+        if (firstPick && language == "zh") {
+            // Зеркальные каналы по умолчанию: русский — громко, китайский — тихо.
+            setRussianRoute(AudioRoutes.SPEAKER)
+            setChineseRoute(AudioRoutes.SYSTEM)
+        }
     }
 
     private fun callErrorText(key: String): String {
@@ -387,13 +393,9 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         speech.stop()
         voice.stop()
         if (message.fromChinese) {
-            voice.speakRussian(
-                message.translated,
-                _state.value.russianRoute,
-                _state.value.russianVoice,
-            )
+            speakToOperator(message.translated)
         } else {
-            voice.speakChineseAloud(message.translated, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
+            speakToPartner(message.translated)
         }
     }
 
@@ -402,8 +404,14 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.mode == Mode.REPLY_RUSSIAN) return
         speech.stop()
         voice.stop()
-        addMessage(original = phrase.russian, translated = phrase.chinese, fromChinese = false)
-        voice.speakChineseAloud(phrase.chinese, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
+        addMessage(
+            original = if (operatorChinese()) phrase.chinese else phrase.russian,
+            translated = if (operatorChinese()) phrase.russian else phrase.chinese, fromChinese = false)
+        if (operatorChinese()) {
+            voice.speakRussian(phrase.russian, effectiveRussianRoute(), _state.value.russianVoice)
+        } else {
+            voice.speakChineseAloud(phrase.chinese, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
+        }
     }
 
     /** Набранная вручную русская фраза: перевести, показать в ленте и озвучить. */
@@ -416,12 +424,12 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val translated = applyGlossary(translation.translate(
                         text,
-                        toChinese = true,
+                        toChinese = !operatorChinese(),
                         useDeepL = _state.value.useDeepL,
                         deepLKey = _state.value.deepLKey,
                     ))
                 addMessage(original = text, translated = translated, fromChinese = false)
-                voice.speakChineseAloud(translated, effectiveChineseRoute(), _state.value.chineseRate, _state.value.chineseVoice)
+                speakToPartner(translated)
             } catch (e: Exception) {
                 _state.update {
                     it.copy(error = translationFailureMessage(e))
@@ -438,15 +446,16 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val translated = applyGlossary(translation.translate(
                         text,
-                        toChinese = true,
+                        toChinese = !operatorChinese(),
                         useDeepL = _state.value.useDeepL,
                         deepLKey = _state.value.deepLKey,
                     ))
-                val updated = _state.value.customPhrases + Phrase(
-                    russian = text,
-                    chinese = translated,
-                    category = "Мои фразы",
-                )
+                val newPhrase = if (operatorChinese()) {
+                    Phrase(russian = translated, chinese = text, category = "Мои фразы")
+                } else {
+                    Phrase(russian = text, chinese = translated, category = "Мои фразы")
+                }
+                val updated = _state.value.customPhrases + newPhrase
                 _state.update {
                     it.copy(
                         customPhrases = updated,
@@ -593,22 +602,18 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                     val translated = applyGlossary(
                         translation.translate(
                             text,
-                            toChinese = false,
+                            toChinese = operatorChinese(),
                             useDeepL = _state.value.useDeepL,
                             deepLKey = _state.value.deepLKey,
                         ),
                     )
                     addMessage(original = text, translated = translated, fromChinese = true)
-                    voice.speakRussian(
-                        translated,
-                        _state.value.russianRoute,
-                        _state.value.russianVoice,
-                    )
+                    speakToOperator(translated)
                 } catch (e: Exception) {
                     _state.update {
                         it.copy(error = translationFailureMessage(e))
                     }
-                    restartRecognitionSoon(_state.value.chineseLanguageTag)
+                    restartRecognitionSoon(Mode.LISTEN_CHINESE)
                 }
             }
 
@@ -630,13 +635,13 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
                 val translated = applyGlossary(
                     translation.translate(
                         text,
-                        toChinese = true,
+                        toChinese = !operatorChinese(),
                         useDeepL = _state.value.useDeepL,
                         deepLKey = _state.value.deepLKey,
                     ),
                 )
                 addMessage(original = text, translated = translated, fromChinese = false)
-                voice.speakChineseAloud(translated, _state.value.chineseRoute, _state.value.chineseRate, _state.value.chineseVoice)
+                speakToPartner(translated)
             } catch (e: Exception) {
                 _state.update {
                     it.copy(error = translationFailureMessage(e))
@@ -663,7 +668,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     private fun resumeAfterSpeech() {
         if (speech.isListening) return
         when (_state.value.mode) {
-            Mode.LISTEN_CHINESE -> restartRecognitionSoon(_state.value.chineseLanguageTag)
+            Mode.LISTEN_CHINESE -> restartRecognitionSoon(Mode.LISTEN_CHINESE)
             Mode.REPLY_RUSSIAN -> finishReply()
             Mode.IDLE -> Unit
         }
@@ -678,7 +683,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     private fun resumeAfterInterruption() {
         if (speech.isListening || _state.value.speaking) return
         when (_state.value.mode) {
-            Mode.LISTEN_CHINESE -> restartRecognitionSoon(_state.value.chineseLanguageTag)
+            Mode.LISTEN_CHINESE -> restartRecognitionSoon(Mode.LISTEN_CHINESE)
             Mode.REPLY_RUSSIAN -> finishReply()
             Mode.IDLE -> Unit
         }
@@ -689,18 +694,21 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         resumeListeningAfterReply = false
         _state.update { it.copy(mode = next) }
         if (next == Mode.LISTEN_CHINESE) {
-            restartRecognitionSoon(_state.value.chineseLanguageTag)
+            restartRecognitionSoon(Mode.LISTEN_CHINESE)
         }
     }
 
-    private fun restartRecognitionSoon(languageTag: String) {
+    private fun restartRecognitionSoon(expectedMode: Mode) {
         viewModelScope.launch {
             delay(300)
             val current = _state.value
-            val expectedMode =
-                if (languageTag == "ru-RU") Mode.REPLY_RUSSIAN else Mode.LISTEN_CHINESE
             if (current.mode == expectedMode && !current.speaking && !speech.isListening) {
-                speech.start(languageTag)
+                val tag = if (expectedMode == Mode.LISTEN_CHINESE) {
+                    partnerSpeechTag()
+                } else {
+                    operatorSpeechTag()
+                }
+                speech.start(tag)
             }
         }
     }
@@ -931,6 +939,60 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** В активном звонке китайская озвучка всегда идёт в динамик — в канал. */
+    /** Оператор на китайском интерфейсе — направления работы зеркальны. */
+    private fun operatorChinese(): Boolean = _state.value.appLanguage == "zh"
+
+    /** Язык распознавания речи собеседника (зелёная сфера). */
+    private fun partnerSpeechTag(): String =
+        if (operatorChinese()) "ru-RU" else _state.value.chineseLanguageTag
+
+    /** Язык распознавания речи оператора (кнопка «Ответить»). */
+    private fun operatorSpeechTag(): String =
+        if (operatorChinese()) _state.value.chineseLanguageTag else "ru-RU"
+
+    private fun effectiveRussianRoute(): String =
+        if (_state.value.callState == "connected") {
+            AudioRoutes.SPEAKER
+        } else {
+            _state.value.russianRoute
+        }
+
+    /** Тихо оператору: перевод речи собеседника на языке оператора. */
+    private fun speakToOperator(text: String) {
+        if (operatorChinese()) {
+            voice.speakChineseAloud(
+                text,
+                _state.value.chineseRoute,
+                _state.value.chineseRate,
+                _state.value.chineseVoice,
+            )
+        } else {
+            voice.speakRussian(
+                text,
+                _state.value.russianRoute,
+                _state.value.russianVoice,
+            )
+        }
+    }
+
+    /** Громко собеседнику: озвучка на языке собеседника. */
+    private fun speakToPartner(text: String) {
+        if (operatorChinese()) {
+            voice.speakRussian(
+                text,
+                effectiveRussianRoute(),
+                _state.value.russianVoice,
+            )
+        } else {
+            voice.speakChineseAloud(
+                text,
+                effectiveChineseRoute(),
+                _state.value.chineseRate,
+                _state.value.chineseVoice,
+            )
+        }
+    }
+
     private fun effectiveChineseRoute(): String =
         if (_state.value.callState == "connected") {
             AudioRoutes.SPEAKER
